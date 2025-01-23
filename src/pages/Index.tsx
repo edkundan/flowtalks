@@ -39,12 +39,12 @@ const Index = () => {
       {/* Main Content */}
       <main className="flex-1 flex flex-col items-center justify-center p-4">
         {!isConnected ? (
-          <div className="text-center space-y-6 animate-fadeIn">
-            <div className="w-24 h-24 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-8">
-              <Play className="w-12 h-12 text-primary" />
+          <div className="text-center space-y-8 animate-fadeIn">
+            <div className="w-32 h-32 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-8 animate-pulse hover:scale-105 transition-transform duration-300">
+              <Play className="w-16 h-16 text-primary" />
             </div>
-            <h2 className="text-2xl font-semibold">Ready to Connect</h2>
-            <p className="text-muted-foreground">
+            <h2 className="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-primary/70">Ready to Connect</h2>
+            <p className="text-xl text-muted-foreground">
               Choose how you want to communicate
             </p>
             
@@ -52,19 +52,19 @@ const Index = () => {
               defaultValue="chat"
               value={communicationType}
               onValueChange={(value) => setCommunicationType(value as "chat" | "audio")}
-              className="flex gap-4 justify-center"
+              className="flex gap-6 justify-center"
             >
               <div className="flex items-center space-x-2">
                 <RadioGroupItem value="chat" id="chat" />
-                <Label htmlFor="chat" className="flex items-center gap-2 cursor-pointer">
-                  <MessageSquare className="w-4 h-4" />
+                <Label htmlFor="chat" className="flex items-center gap-2 cursor-pointer text-lg">
+                  <MessageSquare className="w-5 h-5" />
                   Text Chat
                 </Label>
               </div>
               <div className="flex items-center space-x-2">
                 <RadioGroupItem value="audio" id="audio" />
-                <Label htmlFor="audio" className="flex items-center gap-2 cursor-pointer">
-                  <Phone className="w-4 h-4" />
+                <Label htmlFor="audio" className="flex items-center gap-2 cursor-pointer text-lg">
+                  <Phone className="w-5 h-5" />
                   Audio Call
                 </Label>
               </div>
@@ -72,7 +72,7 @@ const Index = () => {
 
             <Button
               size="lg"
-              className="mt-4 button-glow"
+              className="mt-4 button-glow text-lg px-8 py-6"
               disabled={isConnecting}
               onClick={handleConnect}
             >
