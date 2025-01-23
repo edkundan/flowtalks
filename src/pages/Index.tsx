@@ -73,7 +73,7 @@ const Index = () => {
 
             <Button
               size="lg"
-              className="mt-4 button-glow text-lg px-8 py-6"
+              className="mt-4 button-glow text-lg px-8 py-6 bg-gradient-to-r from-primary to-primary/80 hover:scale-105 active:scale-95 transition-all duration-200 shadow-lg hover:shadow-primary/50 disabled:hover:scale-100"
               disabled={isConnecting}
               onClick={handleConnect}
             >
