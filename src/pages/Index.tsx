@@ -52,7 +52,7 @@ const Index = () => {
               defaultValue="chat"
               value={communicationType}
               onValueChange={(value) => setCommunicationType(value as "chat" | "audio")}
-              className="flex gap-6 justify-center"
+              className="flex items-center gap-6 justify-center"
             >
               <div className="flex items-center space-x-2">
                 <RadioGroupItem value="chat" id="chat" />
@@ -61,6 +61,7 @@ const Index = () => {
                   Text Chat
                 </Label>
               </div>
+              <span className="text-lg text-muted-foreground">or</span>
               <div className="flex items-center space-x-2">
                 <RadioGroupItem value="audio" id="audio" />
                 <Label htmlFor="audio" className="flex items-center gap-2 cursor-pointer text-lg">
