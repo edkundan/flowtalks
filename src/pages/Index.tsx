@@ -11,6 +11,8 @@ import { SettingsDialog } from "@/components/SettingsDialog";
 import { DisclaimerDialog } from "@/components/DisclaimerDialog";
 import { useSettings } from "@/hooks/use-settings";
 import { ConnectingState } from "@/components/ConnectingState";
+import { webRTCService } from "@/services/webrtc";
+import { useToast } from "@/components/ui/use-toast";
 
 const Index = () => {
   const [isConnecting, setIsConnecting] = useState(false);
@@ -18,15 +20,40 @@ const Index = () => {
   const [communicationType, setCommunicationType] = useState<"chat" | "audio">("chat");
   const [showDisclaimer, setShowDisclaimer] = useState(true);
   const { isOpen: isSettingsOpen, closeSettings } = useSettings();
+  const { toast } = useToast();
 
-  const handleConnect = () => {
+  const handleConnect = async () => {
     setIsConnecting(true);
-    // Simulate connection delay
-    setTimeout(() => {
+    try {
+      console.log("Initializing WebRTC connection...");
+      await webRTCService.initializePeer(true);
+      
+      // Simulate finding a peer (in reality, this would involve a signaling server)
+      setTimeout(() => {
+        setIsConnecting(false);
+        setIsConnected(true);
+        toast({
+          title: "Connected!",
+          description: "You're now connected to a random peer.",
+        });
+      }, 3000);
+    } catch (error) {
+      console.error("Failed to initialize WebRTC:", error);
+      toast({
+        variant: "destructive",
+        title: "Connection failed",
+        description: "Failed to establish peer connection. Please try again.",
+      });
       setIsConnecting(false);
-      setIsConnected(true);
-    }, 3000);
+    }
   };
+
+  useEffect(() => {
+    return () => {
+      // Cleanup WebRTC connection when component unmounts
+      webRTCService.disconnect();
+    };
+  }, []);
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
