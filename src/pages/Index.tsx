@@ -40,8 +40,16 @@ const Index = () => {
       <main className="flex-1 flex flex-col items-center justify-center p-4">
         {!isConnected ? (
           <div className="text-center space-y-8 animate-fadeIn">
-            <div className="w-32 h-32 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-8 animate-pulse hover:scale-105 transition-transform duration-300">
-              <Play className="w-16 h-16 text-primary" />
+            <div className="w-32 h-32 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-8 group transition-all duration-500">
+              {communicationType === "chat" ? (
+                <MessageSquare 
+                  className="w-16 h-16 text-primary animate-bounce transition-all duration-300 group-hover:scale-110" 
+                />
+              ) : (
+                <Phone 
+                  className="w-16 h-16 text-primary animate-pulse transition-all duration-300 group-hover:scale-110" 
+                />
+              )}
             </div>
             <h2 className="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-primary/70">Ready to Connect</h2>
             <p className="text-xl text-muted-foreground">
