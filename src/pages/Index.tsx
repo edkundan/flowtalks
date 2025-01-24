@@ -10,6 +10,7 @@ import { Header } from "@/components/Header";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { DisclaimerDialog } from "@/components/DisclaimerDialog";
 import { useSettings } from "@/hooks/use-settings";
+import { ConnectingState } from "@/components/ConnectingState";
 
 const Index = () => {
   const [isConnecting, setIsConnecting] = useState(false);
