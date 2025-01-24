@@ -1,6 +1,7 @@
 import { History, Info, Mail, Monitor, Settings } from "lucide-react";
 import { Button } from "./ui/button";
 import { ThemeToggle } from "./theme-toggle";
+import { Link, useNavigate } from "react-router-dom";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,18 +12,29 @@ import { useSettings } from "@/hooks/use-settings";
 
 export const Header = () => {
   const { openSettings } = useSettings();
+  const navigate = useNavigate();
 
   return (
     <header className="flex items-center justify-between p-4 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <h1 className="text-xl font-semibold text-primary">RandomChat</h1>
+      <Link to="/" className="text-xl font-semibold text-primary">
+        RandomChat
+      </Link>
       
       <div className="flex items-center gap-6">
         <nav className="hidden md:flex items-center gap-6">
-          <Button variant="ghost" className="flex flex-col items-center gap-1">
+          <Button 
+            variant="ghost" 
+            className="flex flex-col items-center gap-1"
+            onClick={() => navigate('/about')}
+          >
             <Info className="h-4 w-4" />
             <span className="text-xs">About Us</span>
           </Button>
-          <Button variant="ghost" className="flex flex-col items-center gap-1">
+          <Button 
+            variant="ghost" 
+            className="flex flex-col items-center gap-1"
+            onClick={() => navigate('/contact')}
+          >
             <Mail className="h-4 w-4" />
             <span className="text-xs">Contact Us</span>
           </Button>
@@ -59,11 +71,11 @@ export const Header = () => {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem>
+            <DropdownMenuItem onClick={() => navigate('/about')}>
               <Info className="h-4 w-4 mr-2" />
               About Us
             </DropdownMenuItem>
-            <DropdownMenuItem>
+            <DropdownMenuItem onClick={() => navigate('/contact')}>
               <Mail className="h-4 w-4 mr-2" />
               Contact Us
             </DropdownMenuItem>

@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Image, Send } from "lucide-react";
+import { Send } from "lucide-react";
 import { useState } from "react";
 
 export function ChatInput() {
@@ -15,9 +15,6 @@ export function ChatInput() {
 
   return (
     <div className="flex items-center gap-2 p-4 bg-background/90 backdrop-blur-sm rounded-lg">
-      <Button variant="ghost" size="icon" className="rounded-full">
-        <Image className="h-5 w-5" />
-      </Button>
       <Input
         value={message}
         onChange={(e) => setMessage(e.target.value)}
@@ -26,12 +23,11 @@ export function ChatInput() {
         onKeyPress={(e) => e.key === "Enter" && handleSend()}
       />
       <Button
-        variant="ghost"
-        size="icon"
-        className="rounded-full text-primary hover:text-primary/80"
         onClick={handleSend}
+        className="px-6 py-2 h-12 text-base font-medium flex items-center gap-2 bg-primary hover:bg-primary/90 transition-all duration-200 transform hover:scale-105 active:scale-95"
       >
         <Send className="h-5 w-5" />
+        Send
       </Button>
     </div>
   );
