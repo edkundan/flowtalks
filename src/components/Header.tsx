@@ -1,5 +1,6 @@
-import { Info, Mail, Monitor, Settings } from "lucide-react";
+import { History, Info, Mail, Monitor, Settings } from "lucide-react";
 import { Button } from "./ui/button";
+import { ThemeToggle } from "./theme-toggle";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,17 +18,21 @@ export const Header = () => {
       
       <div className="flex items-center gap-6">
         <nav className="hidden md:flex items-center gap-6">
-          <Button variant="ghost" className="flex items-center gap-2">
+          <Button variant="ghost" className="flex flex-col items-center gap-1">
             <Info className="h-4 w-4" />
-            About Us
+            <span className="text-xs">About Us</span>
           </Button>
-          <Button variant="ghost" className="flex items-center gap-2">
+          <Button variant="ghost" className="flex flex-col items-center gap-1">
             <Mail className="h-4 w-4" />
-            Contact Us
+            <span className="text-xs">Contact Us</span>
           </Button>
-          <Button variant="ghost" className="flex items-center gap-2">
+          <Button variant="ghost" className="flex flex-col items-center gap-1">
             <Monitor className="h-4 w-4" />
-            Live Monitoring
+            <span className="text-xs">Live Users</span>
+          </Button>
+          <Button variant="ghost" className="flex flex-col items-center gap-1">
+            <History className="h-4 w-4" />
+            <span className="text-xs">History</span>
           </Button>
         </nav>
 
@@ -64,11 +69,17 @@ export const Header = () => {
             </DropdownMenuItem>
             <DropdownMenuItem>
               <Monitor className="h-4 w-4 mr-2" />
-              Live Monitoring
+              Live Users
+            </DropdownMenuItem>
+            <DropdownMenuItem>
+              <History className="h-4 w-4 mr-2" />
+              History
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
 
+        <ThemeToggle />
+        
         <Button
           variant="ghost"
           size="icon"

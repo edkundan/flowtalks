@@ -20,10 +20,11 @@ const Index = () => {
 
   const handleConnect = () => {
     setIsConnecting(true);
+    // Simulate connection delay
     setTimeout(() => {
       setIsConnecting(false);
       setIsConnected(true);
-    }, 1500);
+    }, 3000);
   };
 
   return (
@@ -32,7 +33,10 @@ const Index = () => {
       
       <main className="flex-1 flex flex-col items-center justify-center p-4">
         {!isConnected ? (
-          <div className="text-center space-y-8 animate-fadeIn">
+          isConnecting ? (
+            <ConnectingState />
+          ) : (
+            <div className="text-center space-y-8 animate-fadeIn">
             <div className="w-32 h-32 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-8 group transition-all duration-500">
               {communicationType === "chat" ? (
                 <MessageSquare 
@@ -72,15 +76,16 @@ const Index = () => {
               </div>
             </RadioGroup>
 
-            <Button
-              size="lg"
-              className="mt-4 button-glow text-lg px-8 py-6 bg-gradient-to-r from-primary to-primary/80 hover:scale-105 active:scale-95 transition-all duration-200 shadow-lg hover:shadow-primary/50 disabled:hover:scale-100"
-              disabled={isConnecting}
-              onClick={handleConnect}
-            >
-              {isConnecting ? "Connecting..." : `Start ${communicationType === "chat" ? "Chat" : "Call"}`}
-            </Button>
-          </div>
+              <Button
+                size="lg"
+                className="mt-4 button-glow text-lg px-8 py-6 bg-gradient-to-r from-primary to-primary/80 hover:scale-105 active:scale-95 transition-all duration-200 shadow-lg hover:shadow-primary/50 disabled:hover:scale-100"
+                disabled={isConnecting}
+                onClick={handleConnect}
+              >
+                {isConnecting ? "Connecting..." : `Start ${communicationType === "chat" ? "Chat" : "Call"}`}
+              </Button>
+            </div>
+          )
         ) : (
           <div className="w-full max-w-2xl space-y-4 animate-fadeIn">
             <div className="glass rounded-lg p-8 min-h-[400px]">
