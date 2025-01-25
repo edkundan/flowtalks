@@ -42,9 +42,8 @@ export function ChatInput() {
       />
       <Button
         onClick={handleSend}
-        className="px-8 py-6 h-14 text-lg font-medium flex items-center gap-3 bg-primary hover:bg-primary/90 transition-all duration-200 transform hover:scale-105 active:scale-95"
+        className="px-8 py-6 h-14 text-lg font-medium bg-primary hover:bg-primary/90 transition-all duration-200 transform hover:scale-105 active:scale-95"
       >
-        <Send className="h-6 w-6" />
         Send Message
       </Button>
     </div>

@@ -1,5 +1,4 @@
 import { Button } from "@/components/ui/button";
-import { ThemeToggle } from "@/components/theme-toggle";
 import { ChatControls } from "@/components/chat-controls";
 import { ChatInput } from "@/components/chat-input";
 import { MessageSquare, Phone } from "lucide-react";
@@ -13,6 +12,7 @@ import { useSettings } from "@/hooks/use-settings";
 import { ConnectingState } from "@/components/ConnectingState";
 import { webRTCService } from "@/services/webrtc";
 import { useToast } from "@/components/ui/use-toast";
+import { OnlineUsers } from "@/components/online-users";
 
 const Index = () => {
   const [isConnecting, setIsConnecting] = useState(false);
@@ -26,7 +26,7 @@ const Index = () => {
     setIsConnecting(true);
     try {
       console.log("Initializing WebRTC connection...");
-      await webRTCService.initializePeer(true);
+      await webRTCService.initializePeer(true, communicationType === "audio");
       
       // Simulate finding a peer (in reality, this would involve a signaling server)
       setTimeout(() => {
@@ -34,7 +34,7 @@ const Index = () => {
         setIsConnected(true);
         toast({
           title: "Connected!",
-          description: "You're now connected to a random peer.",
+          description: `You're now connected for a random ${communicationType === "chat" ? "chat" : "call"}.`,
         });
       }, 3000);
     } catch (error) {
@@ -50,7 +50,6 @@ const Index = () => {
 
   useEffect(() => {
     return () => {
-      // Cleanup WebRTC connection when component unmounts
       webRTCService.disconnect();
     };
   }, []);
@@ -60,49 +59,55 @@ const Index = () => {
       <Header />
       
       <main className="flex-1 flex flex-col items-center justify-center p-4">
+        <div className="absolute top-20 right-4">
+          <OnlineUsers />
+        </div>
+
         {!isConnected ? (
           isConnecting ? (
             <ConnectingState />
           ) : (
             <div className="text-center space-y-8 animate-fadeIn">
-            <div className="w-32 h-32 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-8 group transition-all duration-500">
-              {communicationType === "chat" ? (
-                <MessageSquare 
-                  className="w-16 h-16 text-primary animate-bounce transition-all duration-300 group-hover:scale-110" 
-                />
-              ) : (
-                <Phone 
-                  className="w-16 h-16 text-primary animate-pulse transition-all duration-300 group-hover:scale-110" 
-                />
-              )}
-            </div>
-            <h2 className="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-primary/70">Ready to Connect</h2>
-            <p className="text-xl text-muted-foreground">
-              Choose how you want to communicate
-            </p>
-            
-            <RadioGroup
-              defaultValue="chat"
-              value={communicationType}
-              onValueChange={(value) => setCommunicationType(value as "chat" | "audio")}
-              className="flex items-center gap-6 justify-center"
-            >
-              <div className="flex items-center space-x-2">
-                <RadioGroupItem value="chat" id="chat" />
-                <Label htmlFor="chat" className="flex items-center gap-2 cursor-pointer text-lg">
-                  <MessageSquare className="w-5 h-5" />
-                  Text Chat
-                </Label>
+              <div className="w-32 h-32 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-8 group transition-all duration-500">
+                {communicationType === "chat" ? (
+                  <MessageSquare 
+                    className="w-16 h-16 text-primary animate-bounce transition-all duration-300 group-hover:scale-110" 
+                  />
+                ) : (
+                  <Phone 
+                    className="w-16 h-16 text-primary animate-pulse transition-all duration-300 group-hover:scale-110" 
+                  />
+                )}
               </div>
-              <span className="text-lg text-muted-foreground">or</span>
-              <div className="flex items-center space-x-2">
-                <RadioGroupItem value="audio" id="audio" />
-                <Label htmlFor="audio" className="flex items-center gap-2 cursor-pointer text-lg">
-                  <Phone className="w-5 h-5" />
-                  Audio Call
-                </Label>
-              </div>
-            </RadioGroup>
+              <h2 className="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-primary/70">
+                Ready to Connect
+              </h2>
+              <p className="text-xl text-muted-foreground">
+                Choose how you want to communicate
+              </p>
+              
+              <RadioGroup
+                defaultValue="chat"
+                value={communicationType}
+                onValueChange={(value) => setCommunicationType(value as "chat" | "audio")}
+                className="flex items-center gap-6 justify-center"
+              >
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="chat" id="chat" />
+                  <Label htmlFor="chat" className="flex items-center gap-2 cursor-pointer text-lg">
+                    <MessageSquare className="w-5 h-5" />
+                    Text Chat
+                  </Label>
+                </div>
+                <span className="text-lg text-muted-foreground">or</span>
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="audio" id="audio" />
+                  <Label htmlFor="audio" className="flex items-center gap-2 cursor-pointer text-lg">
+                    <Phone className="w-5 h-5" />
+                    Audio Call
+                  </Label>
+                </div>
+              </RadioGroup>
 
               <Button
                 size="lg"
@@ -121,7 +126,21 @@ const Index = () => {
             </div>
             {communicationType === "chat" ? (
               <ChatInput />
-            ) : null}
+            ) : (
+              <div className="flex justify-center">
+                <Button
+                  variant="destructive"
+                  size="lg"
+                  onClick={() => {
+                    webRTCService.disconnect();
+                    setIsConnected(false);
+                  }}
+                  className="px-8 py-6"
+                >
+                  End Call
+                </Button>
+              </div>
+            )}
             <div className="flex justify-center">
               <ChatControls />
             </div>
