@@ -10,14 +10,16 @@ class WebRTCService {
   private peer: Peer.Instance | null = null;
   private stream: MediaStream | null = null;
   private onlineUsers: number = 0;
-  private onUserCountChange: ((count: number) => void) | null = null;
+  private userCountCallback: ((count: number) => void) | null = null;
 
   async initializePeer(initiator: boolean = false, isAudioCall: boolean = false): Promise<Peer.Instance> {
     console.log('Initializing WebRTC peer connection', { initiator, isAudioCall });
     
     try {
       if (isAudioCall) {
+        console.log('Requesting audio stream...');
         this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        console.log('Audio stream obtained');
       }
 
       this.peer = new Peer({
@@ -65,6 +67,9 @@ class WebRTCService {
     this.peer.on('stream', (stream) => {
       console.log('Received remote stream');
       // Handle incoming audio stream
+      const audio = new Audio();
+      audio.srcObject = stream;
+      audio.play().catch(console.error);
     });
 
     this.peer.on('close', () => {
@@ -86,6 +91,7 @@ class WebRTCService {
 
   disconnect() {
     if (this.stream) {
+      console.log('Stopping audio tracks...');
       this.stream.getTracks().forEach(track => track.stop());
       this.stream = null;
     }
@@ -97,14 +103,16 @@ class WebRTCService {
     }
   }
 
-  setUserCountCallback(callback: (count: number) => void) {
-    this.onUserCountCallback = callback;
+  setUserCountCallback(callback: ((count: number) => void) | null) {
+    console.log('Setting user count callback');
+    this.userCountCallback = callback;
   }
 
   private updateOnlineUsers(count: number) {
+    console.log('Updating online users count:', count);
     this.onlineUsers = count;
-    if (this.onUserCountCallback) {
-      this.onUserCountCallback(count);
+    if (this.userCountCallback) {
+      this.userCountCallback(count);
     }
   }
 }

@@ -6,8 +6,12 @@ export function OnlineUsers() {
   const [userCount, setUserCount] = useState(0);
 
   useEffect(() => {
+    console.log('Setting up online users component');
     webRTCService.setUserCountCallback(setUserCount);
-    return () => webRTCService.setUserCountCallback(null);
+    return () => {
+      console.log('Cleaning up online users component');
+      webRTCService.setUserCountCallback(null);
+    };
   }, []);
 
   return (
