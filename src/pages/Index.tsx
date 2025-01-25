@@ -26,8 +26,12 @@ const Index = () => {
     setIsConnecting(true);
     try {
       console.log("Initializing WebRTC connection...");
-      await webRTCService.initializePeer(true, communicationType === "audio");
+      const peer = await webRTCService.initializePeer(true, communicationType === "audio");
       
+      if (!peer) {
+        throw new Error("Failed to create peer connection");
+      }
+
       // Simulate finding a peer (in reality, this would involve a signaling server)
       setTimeout(() => {
         setIsConnecting(false);
@@ -39,13 +43,22 @@ const Index = () => {
       }, 3000);
     } catch (error) {
       console.error("Failed to initialize WebRTC:", error);
+      setIsConnecting(false);
       toast({
         variant: "destructive",
         title: "Connection failed",
         description: "Failed to establish peer connection. Please try again.",
       });
-      setIsConnecting(false);
     }
+  };
+
+  const handleDisconnect = () => {
+    webRTCService.disconnect();
+    setIsConnected(false);
+    toast({
+      title: "Disconnected",
+      description: "You've been disconnected from the chat.",
+    });
   };
 
   useEffect(() => {

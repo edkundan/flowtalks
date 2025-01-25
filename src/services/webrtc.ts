@@ -16,37 +16,53 @@ class WebRTCService {
     console.log('Initializing WebRTC peer connection', { initiator, isAudioCall });
     
     try {
+      // Cleanup any existing peer connection
+      this.disconnect();
+
       if (isAudioCall) {
         console.log('Requesting audio stream...');
         this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         console.log('Audio stream obtained');
       }
 
-      this.peer = new Peer({
+      const peerOptions: Peer.Options = {
         initiator,
         trickle: false,
-        stream: isAudioCall ? this.stream : undefined,
         config: {
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:global.stun.twilio.com:3478' }
           ]
         }
-      });
+      };
+
+      // Only add stream if it exists and audio call is enabled
+      if (this.stream && isAudioCall) {
+        peerOptions.stream = this.stream;
+      }
+
+      // Create new peer instance
+      this.peer = new Peer(peerOptions);
+      console.log('Peer instance created successfully');
 
       this.setupPeerEvents();
       return this.peer;
     } catch (error) {
       console.error('Error initializing peer:', error);
+      this.disconnect(); // Cleanup on error
       throw error;
     }
   }
 
   private setupPeerEvents() {
-    if (!this.peer) return;
+    if (!this.peer) {
+      console.error('Cannot setup events: peer is null');
+      return;
+    }
 
     this.peer.on('error', (err) => {
       console.error('WebRTC peer error:', err);
+      this.disconnect(); // Cleanup on error
     });
 
     this.peer.on('signal', (data) => {
@@ -66,39 +82,62 @@ class WebRTCService {
 
     this.peer.on('stream', (stream) => {
       console.log('Received remote stream');
-      // Handle incoming audio stream
-      const audio = new Audio();
-      audio.srcObject = stream;
-      audio.play().catch(console.error);
+      if (stream.getAudioTracks().length > 0) {
+        const audio = new Audio();
+        audio.srcObject = stream;
+        audio.play().catch(error => {
+          console.error('Error playing audio:', error);
+        });
+      }
     });
 
     this.peer.on('close', () => {
       console.log('Peer connection closed');
-      this.updateOnlineUsers(this.onlineUsers - 1);
+      this.updateOnlineUsers(Math.max(0, this.onlineUsers - 1));
       this.disconnect();
     });
   }
 
   sendMessage(message: string): boolean {
-    if (this.peer && this.peer.connected) {
+    if (!this.peer) {
+      console.warn('Cannot send message: peer is null');
+      return false;
+    }
+
+    if (!this.peer.connected) {
+      console.warn('Cannot send message: peer not connected');
+      return false;
+    }
+
+    try {
       console.log('Sending message:', message);
       this.peer.send(message);
       return true;
+    } catch (error) {
+      console.error('Error sending message:', error);
+      return false;
     }
-    console.warn('Cannot send message: peer not connected');
-    return false;
   }
 
   disconnect() {
+    console.log('Disconnecting WebRTC service...');
+    
     if (this.stream) {
       console.log('Stopping audio tracks...');
-      this.stream.getTracks().forEach(track => track.stop());
+      this.stream.getTracks().forEach(track => {
+        track.stop();
+        console.log('Audio track stopped:', track.id);
+      });
       this.stream = null;
     }
     
     if (this.peer) {
       console.log('Destroying peer connection');
-      this.peer.destroy();
+      try {
+        this.peer.destroy();
+      } catch (error) {
+        console.error('Error destroying peer:', error);
+      }
       this.peer = null;
     }
   }
@@ -110,9 +149,9 @@ class WebRTCService {
 
   private updateOnlineUsers(count: number) {
     console.log('Updating online users count:', count);
-    this.onlineUsers = count;
+    this.onlineUsers = Math.max(0, count);
     if (this.userCountCallback) {
-      this.userCountCallback(count);
+      this.userCountCallback(this.onlineUsers);
     }
   }
 }
