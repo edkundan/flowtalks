@@ -25,40 +25,40 @@ const Index = () => {
   const handleConnect = async () => {
     setIsConnecting(true);
     try {
-      console.log("Initializing WebRTC connection...");
+      console.log("Initializing PeerJS connection...");
       const peer = await webRTCService.initializePeer(true, communicationType === "audio");
       
       if (!peer) {
         throw new Error("Failed to create peer connection");
       }
 
-      // Set up event listeners for the peer
-      peer.on('connect', () => {
+      peer.on('open', () => {
         setIsConnecting(false);
         setIsConnected(true);
         toast({
           title: "Connected!",
-          description: `You're now connected for a random ${communicationType === "chat" ? "chat" : "call"}.`,
+          description: `Ready for ${communicationType === "chat" ? "chat" : "call"}. Waiting for a partner...`,
         });
       });
 
       peer.on('error', (err) => {
         console.error('Peer connection error:', err);
         setIsConnecting(false);
+        setIsConnected(false);
         toast({
           variant: "destructive",
           title: "Connection failed",
-          description: "Failed to establish peer connection. Please try again.",
+          description: "Failed to establish connection. Please try again.",
         });
       });
 
     } catch (error) {
-      console.error("Failed to initialize WebRTC:", error);
+      console.error("Failed to initialize PeerJS:", error);
       setIsConnecting(false);
       toast({
         variant: "destructive",
         title: "Connection failed",
-        description: "Failed to establish peer connection. Please try again.",
+        description: "Failed to establish connection. Please try again.",
       });
     }
   };
@@ -73,7 +73,6 @@ const Index = () => {
   };
 
   useEffect(() => {
-    // Cleanup on component unmount
     return () => {
       webRTCService.disconnect();
     };
@@ -156,10 +155,7 @@ const Index = () => {
                 <Button
                   variant="destructive"
                   size="lg"
-                  onClick={() => {
-                    webRTCService.disconnect();
-                    setIsConnected(false);
-                  }}
+                  onClick={handleDisconnect}
                   className="px-8 py-6"
                 >
                   End Call

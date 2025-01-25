@@ -1,19 +1,20 @@
-import Peer from 'simple-peer';
+import Peer from 'peerjs';
 
 interface PeerState {
-  peer: Peer.Instance | null;
+  peer: Peer | null;
   connected: boolean;
   error: Error | null;
 }
 
 class WebRTCService {
-  private peer: Peer.Instance | null = null;
+  private peer: Peer | null = null;
   private stream: MediaStream | null = null;
   private onlineUsers: number = 0;
   private userCountCallback: ((count: number) => void) | null = null;
+  private connections: Map<string, any> = new Map();
 
-  async initializePeer(initiator: boolean = false, isAudioCall: boolean = false): Promise<Peer.Instance | null> {
-    console.log('Initializing WebRTC peer connection', { initiator, isAudioCall });
+  async initializePeer(initiator: boolean = false, isAudioCall: boolean = false): Promise<Peer | null> {
+    console.log('Initializing PeerJS connection', { initiator, isAudioCall });
     
     try {
       // Cleanup any existing peer connection
@@ -23,42 +24,26 @@ class WebRTCService {
         console.log('Requesting audio stream...');
         this.stream = await navigator.mediaDevices.getUserMedia({ 
           audio: true,
-          video: false // Explicitly disable video
+          video: false
         });
         console.log('Audio stream obtained:', this.stream.id);
       }
 
-      // Define peer options with wrtc for Node.js environment
-      const peerOptions: Peer.Options = {
-        initiator,
-        trickle: false,
-        config: {
-          iceServers: [
-            { urls: ['stun:stun.l.google.com:19302', 'stun:global.stun.twilio.com:3478'] },
-            {
-              urls: 'turn:numb.viagenie.ca',
-              username: 'webrtc@live.com',
-              credential: 'muazkh'
-            }
-          ]
-        },
-        stream: isAudioCall ? this.stream : undefined,
-        objectMode: true
-      };
+      // Generate a random peer ID
+      const peerId = Math.random().toString(36).substring(7);
+      console.log('Generated peer ID:', peerId);
 
-      console.log('Creating new peer with options:', peerOptions);
-      
-      // Create new peer instance
-      this.peer = new Peer(peerOptions);
-      
-      if (!this.peer) {
-        throw new Error('Failed to create peer instance');
-      }
-
-      console.log('Peer instance created successfully');
+      // Create new PeerJS instance
+      this.peer = new Peer(peerId, {
+        host: 'peerjs-server.herokuapp.com',
+        secure: true,
+        port: 443,
+        debug: 3,
+      });
 
       this.setupPeerEvents();
       return this.peer;
+
     } catch (error) {
       console.error('Error initializing peer:', error);
       this.disconnect();
@@ -72,39 +57,57 @@ class WebRTCService {
       return;
     }
 
-    this.peer.on('error', (err) => {
-      console.error('WebRTC peer error:', err);
-      this.disconnect();
-    });
-
-    this.peer.on('signal', (data) => {
-      console.log('WebRTC signal generated:', data);
-    });
-
-    this.peer.on('connect', () => {
-      console.log('WebRTC peer connection established');
+    this.peer.on('open', (id) => {
+      console.log('PeerJS connection opened with ID:', id);
       this.updateOnlineUsers(this.onlineUsers + 1);
     });
 
-    this.peer.on('data', (data) => {
-      console.log('Received data:', data.toString());
+    this.peer.on('connection', (conn) => {
+      console.log('Received connection from peer:', conn.peer);
+      this.handleConnection(conn);
     });
 
-    this.peer.on('stream', (stream) => {
-      console.log('Received remote stream:', stream.id);
-      if (stream.getAudioTracks().length > 0) {
-        const audio = new Audio();
-        audio.srcObject = stream;
-        audio.play().catch(error => {
-          console.error('Error playing audio:', error);
-        });
+    this.peer.on('call', (call) => {
+      console.log('Receiving call from peer:', call.peer);
+      if (this.stream) {
+        call.answer(this.stream);
+        this.handleCall(call);
       }
     });
 
-    this.peer.on('close', () => {
-      console.log('Peer connection closed');
-      this.updateOnlineUsers(Math.max(0, this.onlineUsers - 1));
+    this.peer.on('error', (err) => {
+      console.error('PeerJS error:', err);
       this.disconnect();
+    });
+
+    this.peer.on('close', () => {
+      console.log('PeerJS connection closed');
+      this.updateOnlineUsers(Math.max(0, this.onlineUsers - 1));
+    });
+  }
+
+  private handleConnection(conn: any) {
+    this.connections.set(conn.peer, conn);
+
+    conn.on('data', (data: any) => {
+      console.log('Received data:', data);
+    });
+
+    conn.on('close', () => {
+      console.log('Connection closed:', conn.peer);
+      this.connections.delete(conn.peer);
+      this.updateOnlineUsers(Math.max(0, this.onlineUsers - 1));
+    });
+  }
+
+  private handleCall(call: any) {
+    call.on('stream', (remoteStream: MediaStream) => {
+      console.log('Received remote stream:', remoteStream.id);
+      const audio = new Audio();
+      audio.srcObject = remoteStream;
+      audio.play().catch(error => {
+        console.error('Error playing audio:', error);
+      });
     });
   }
 
@@ -114,14 +117,11 @@ class WebRTCService {
       return false;
     }
 
-    if (!this.peer.connected) {
-      console.warn('Cannot send message: peer not connected');
-      return false;
-    }
-
     try {
       console.log('Sending message:', message);
-      this.peer.send(message);
+      this.connections.forEach(conn => {
+        conn.send(message);
+      });
       return true;
     } catch (error) {
       console.error('Error sending message:', error);
@@ -130,7 +130,7 @@ class WebRTCService {
   }
 
   disconnect() {
-    console.log('Disconnecting WebRTC service...');
+    console.log('Disconnecting PeerJS service...');
     
     if (this.stream) {
       console.log('Stopping audio tracks...');
@@ -141,13 +141,14 @@ class WebRTCService {
       this.stream = null;
     }
     
+    this.connections.forEach(conn => {
+      conn.close();
+    });
+    this.connections.clear();
+
     if (this.peer) {
       console.log('Destroying peer connection');
-      try {
-        this.peer.destroy();
-      } catch (error) {
-        console.error('Error destroying peer:', error);
-      }
+      this.peer.destroy();
       this.peer = null;
     }
   }
