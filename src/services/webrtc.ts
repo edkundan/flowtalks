@@ -12,7 +12,7 @@ class WebRTCService {
   private onlineUsers: number = 0;
   private userCountCallback: ((count: number) => void) | null = null;
 
-  async initializePeer(initiator: boolean = false, isAudioCall: boolean = false): Promise<Peer.Instance> {
+  async initializePeer(initiator: boolean = false, isAudioCall: boolean = false): Promise<Peer.Instance | null> {
     console.log('Initializing WebRTC peer connection', { initiator, isAudioCall });
     
     try {
@@ -21,35 +21,47 @@ class WebRTCService {
 
       if (isAudioCall) {
         console.log('Requesting audio stream...');
-        this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        console.log('Audio stream obtained');
+        this.stream = await navigator.mediaDevices.getUserMedia({ 
+          audio: true,
+          video: false // Explicitly disable video
+        });
+        console.log('Audio stream obtained:', this.stream.id);
       }
 
+      // Define peer options with wrtc for Node.js environment
       const peerOptions: Peer.Options = {
         initiator,
         trickle: false,
         config: {
           iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:global.stun.twilio.com:3478' }
+            { urls: ['stun:stun.l.google.com:19302', 'stun:global.stun.twilio.com:3478'] },
+            {
+              urls: 'turn:numb.viagenie.ca',
+              username: 'webrtc@live.com',
+              credential: 'muazkh'
+            }
           ]
-        }
+        },
+        stream: isAudioCall ? this.stream : undefined,
+        objectMode: true
       };
 
-      // Only add stream if it exists and audio call is enabled
-      if (this.stream && isAudioCall) {
-        peerOptions.stream = this.stream;
-      }
-
+      console.log('Creating new peer with options:', peerOptions);
+      
       // Create new peer instance
       this.peer = new Peer(peerOptions);
+      
+      if (!this.peer) {
+        throw new Error('Failed to create peer instance');
+      }
+
       console.log('Peer instance created successfully');
 
       this.setupPeerEvents();
       return this.peer;
     } catch (error) {
       console.error('Error initializing peer:', error);
-      this.disconnect(); // Cleanup on error
+      this.disconnect();
       throw error;
     }
   }
@@ -62,12 +74,11 @@ class WebRTCService {
 
     this.peer.on('error', (err) => {
       console.error('WebRTC peer error:', err);
-      this.disconnect(); // Cleanup on error
+      this.disconnect();
     });
 
     this.peer.on('signal', (data) => {
       console.log('WebRTC signal generated:', data);
-      // Here you would send this signal data to the other peer through your signaling server
     });
 
     this.peer.on('connect', () => {
@@ -77,11 +88,10 @@ class WebRTCService {
 
     this.peer.on('data', (data) => {
       console.log('Received data:', data.toString());
-      // Handle incoming data
     });
 
     this.peer.on('stream', (stream) => {
-      console.log('Received remote stream');
+      console.log('Received remote stream:', stream.id);
       if (stream.getAudioTracks().length > 0) {
         const audio = new Audio();
         audio.srcObject = stream;

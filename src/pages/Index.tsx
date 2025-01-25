@@ -32,15 +32,26 @@ const Index = () => {
         throw new Error("Failed to create peer connection");
       }
 
-      // Simulate finding a peer (in reality, this would involve a signaling server)
-      setTimeout(() => {
+      // Set up event listeners for the peer
+      peer.on('connect', () => {
         setIsConnecting(false);
         setIsConnected(true);
         toast({
           title: "Connected!",
           description: `You're now connected for a random ${communicationType === "chat" ? "chat" : "call"}.`,
         });
-      }, 3000);
+      });
+
+      peer.on('error', (err) => {
+        console.error('Peer connection error:', err);
+        setIsConnecting(false);
+        toast({
+          variant: "destructive",
+          title: "Connection failed",
+          description: "Failed to establish peer connection. Please try again.",
+        });
+      });
+
     } catch (error) {
       console.error("Failed to initialize WebRTC:", error);
       setIsConnecting(false);
@@ -62,6 +73,7 @@ const Index = () => {
   };
 
   useEffect(() => {
+    // Cleanup on component unmount
     return () => {
       webRTCService.disconnect();
     };
