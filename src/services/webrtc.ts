@@ -12,6 +12,8 @@ class WebRTCService {
   private onlineUsers: number = 0;
   private userCountCallback: ((count: number) => void) | null = null;
   private connections: Map<string, any> = new Map();
+  private availablePeers: Set<string> = new Set();
+  private currentConnection: any = null;
 
   async initializePeer(initiator: boolean = false, isAudioCall: boolean = false): Promise<Peer | null> {
     console.log('Initializing PeerJS connection', { initiator, isAudioCall });
@@ -35,11 +37,11 @@ class WebRTCService {
 
       // Create new PeerJS instance with more reliable configuration
       this.peer = new Peer(peerId, {
-        host: '0.peerjs.com', // Using PeerJS public server
+        host: '0.peerjs.com',
         secure: true,
         port: 443,
         debug: 3,
-        config: { // ICE server configuration
+        config: {
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
@@ -51,12 +53,56 @@ class WebRTCService {
       });
 
       this.setupPeerEvents();
+      
+      // If initiator, try to connect to a random peer
+      if (initiator) {
+        this.findAndConnectToRandomPeer(isAudioCall);
+      }
+
       return this.peer;
 
     } catch (error) {
       console.error('Error initializing peer:', error);
       this.disconnect();
       throw error;
+    }
+  }
+
+  private async findAndConnectToRandomPeer(isAudioCall: boolean) {
+    if (!this.peer) return;
+
+    // Wait for peer to be fully initialized
+    await new Promise(resolve => {
+      this.peer!.on('open', resolve);
+    });
+
+    // Get list of available peers from the server
+    try {
+      const response = await fetch('https://0.peerjs.com/peerjs/peers');
+      const peers = await response.json();
+      
+      // Filter out our own ID and already connected peers
+      const availablePeers = peers.filter((id: string) => 
+        id !== this.peer?.id && !this.connections.has(id)
+      );
+
+      if (availablePeers.length > 0) {
+        // Randomly select a peer
+        const randomPeer = availablePeers[Math.floor(Math.random() * availablePeers.length)];
+        console.log('Attempting to connect to random peer:', randomPeer);
+
+        if (isAudioCall && this.stream) {
+          const call = this.peer.call(randomPeer, this.stream);
+          this.handleCall(call);
+        } else {
+          const conn = this.peer.connect(randomPeer);
+          this.handleConnection(conn);
+        }
+      } else {
+        console.log('No available peers found, waiting for incoming connections');
+      }
+    } catch (error) {
+      console.error('Error finding random peer:', error);
     }
   }
 
@@ -86,7 +132,6 @@ class WebRTCService {
 
     this.peer.on('error', (err) => {
       console.error('PeerJS error:', err);
-      // Don't disconnect on every error, only on fatal ones
       if (err.type === 'network' || err.type === 'server-error') {
         this.disconnect();
       }
@@ -104,6 +149,13 @@ class WebRTCService {
   }
 
   private handleConnection(conn: any) {
+    if (this.currentConnection) {
+      console.log('Already connected to a peer, rejecting new connection');
+      conn.close();
+      return;
+    }
+
+    this.currentConnection = conn;
     this.connections.set(conn.peer, conn);
 
     conn.on('data', (data: any) => {
@@ -113,11 +165,20 @@ class WebRTCService {
     conn.on('close', () => {
       console.log('Connection closed:', conn.peer);
       this.connections.delete(conn.peer);
+      this.currentConnection = null;
       this.updateOnlineUsers(Math.max(0, this.onlineUsers - 1));
     });
   }
 
   private handleCall(call: any) {
+    if (this.currentConnection) {
+      console.log('Already in a call, rejecting new call');
+      call.close();
+      return;
+    }
+
+    this.currentConnection = call;
+
     call.on('stream', (remoteStream: MediaStream) => {
       console.log('Received remote stream:', remoteStream.id);
       const audio = new Audio();
@@ -126,19 +187,22 @@ class WebRTCService {
         console.error('Error playing audio:', error);
       });
     });
+
+    call.on('close', () => {
+      console.log('Call ended');
+      this.currentConnection = null;
+    });
   }
 
   sendMessage(message: string): boolean {
-    if (!this.peer) {
-      console.warn('Cannot send message: peer is null');
+    if (!this.currentConnection) {
+      console.warn('Cannot send message: no active connection');
       return false;
     }
 
     try {
       console.log('Sending message:', message);
-      this.connections.forEach(conn => {
-        conn.send(message);
-      });
+      this.currentConnection.send(message);
       return true;
     } catch (error) {
       console.error('Error sending message:', error);
@@ -158,6 +222,11 @@ class WebRTCService {
       this.stream = null;
     }
     
+    if (this.currentConnection) {
+      this.currentConnection.close();
+      this.currentConnection = null;
+    }
+
     this.connections.forEach(conn => {
       conn.close();
     });
@@ -169,7 +238,6 @@ class WebRTCService {
       this.peer = null;
     }
 
-    // Reset online users count
     this.updateOnlineUsers(0);
   }
 
