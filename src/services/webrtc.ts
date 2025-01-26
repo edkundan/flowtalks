@@ -33,12 +33,21 @@ class WebRTCService {
       const peerId = Math.random().toString(36).substring(7);
       console.log('Generated peer ID:', peerId);
 
-      // Create new PeerJS instance
+      // Create new PeerJS instance with more reliable configuration
       this.peer = new Peer(peerId, {
-        host: 'peerjs-server.herokuapp.com',
+        host: '0.peerjs.com', // Using PeerJS public server
         secure: true,
         port: 443,
         debug: 3,
+        config: { // ICE server configuration
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun3.l.google.com:19302' },
+            { urls: 'stun:stun4.l.google.com:19302' },
+          ]
+        }
       });
 
       this.setupPeerEvents();
@@ -77,7 +86,15 @@ class WebRTCService {
 
     this.peer.on('error', (err) => {
       console.error('PeerJS error:', err);
-      this.disconnect();
+      // Don't disconnect on every error, only on fatal ones
+      if (err.type === 'network' || err.type === 'server-error') {
+        this.disconnect();
+      }
+    });
+
+    this.peer.on('disconnected', () => {
+      console.log('PeerJS disconnected, attempting to reconnect...');
+      this.peer?.reconnect();
     });
 
     this.peer.on('close', () => {
@@ -151,6 +168,9 @@ class WebRTCService {
       this.peer.destroy();
       this.peer = null;
     }
+
+    // Reset online users count
+    this.updateOnlineUsers(0);
   }
 
   setUserCountCallback(callback: ((count: number) => void) | null) {
