@@ -14,7 +14,7 @@ class WebRTCService {
   private connections: Map<string, any> = new Map();
   private availablePeers: Set<string> = new Set();
   private currentConnection: any = null;
-  private peerServer: string = '0.peerjs.com';
+  private peerServer: string = 'peerjs-server.herokuapp.com'; // Using a different PeerJS server
   private heartbeatInterval: NodeJS.Timeout | null = null;
 
   async initializePeer(initiator: boolean = false, isAudioCall: boolean = false): Promise<Peer | null> {
@@ -47,14 +47,41 @@ class WebRTCService {
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun2.l.google.com:19302' },
-            { urls: 'stun:stun3.l.google.com:19302' },
-            { urls: 'stun:stun4.l.google.com:19302' },
+            { 
+              urls: 'turn:numb.viagenie.ca',
+              username: 'webrtc@live.com',
+              credential: 'muazkh'
+            }
           ]
         }
       });
 
+      // Set up event handlers before attempting to connect
       this.setupPeerEvents();
+      
+      // Wait for the peer connection to be established
+      await new Promise<void>((resolve, reject) => {
+        if (!this.peer) {
+          reject(new Error('Peer not initialized'));
+          return;
+        }
+
+        const timeout = setTimeout(() => {
+          reject(new Error('Connection timeout'));
+        }, 10000);
+
+        this.peer.on('open', () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+
+        this.peer.on('error', (err) => {
+          clearTimeout(timeout);
+          reject(err);
+        });
+      });
+
+      // Start heartbeat after successful connection
       this.startHeartbeat();
       
       // If initiator, try to connect to a random peer
@@ -77,27 +104,31 @@ class WebRTCService {
     }
 
     this.heartbeatInterval = setInterval(async () => {
-      await this.updatePeerList();
-    }, 5000); // Update every 5 seconds
+      try {
+        await this.updatePeerList();
+      } catch (error) {
+        console.error('Heartbeat error:', error);
+      }
+    }, 5000);
   }
 
   private async updatePeerList() {
+    if (!this.peer?.id) return [];
+
     try {
-      const response = await fetch(`https://${this.peerServer}/peerjs/peers`, {
-        headers: {
-          'Content-Type': 'application/json',
+      // Use PeerJS's listAllPeers method instead of direct HTTP request
+      const peers = await new Promise<string[]>((resolve) => {
+        if (!this.peer) {
+          resolve([]);
+          return;
         }
+        this.peer.listAllPeers((peerList) => resolve(peerList));
       });
 
-      if (!response.ok) {
-        throw new Error(`Failed to fetch peers: ${response.statusText}`);
-      }
-
-      const peers = await response.json();
       this.updateOnlineUsers(peers.length);
       console.log('Current online peers:', peers.length);
-      
       return peers;
+
     } catch (error) {
       console.error('Error updating peer list:', error);
       return [];
@@ -105,39 +136,17 @@ class WebRTCService {
   }
 
   private async findAndConnectToRandomPeer(isAudioCall: boolean) {
-    if (!this.peer) return;
-
-    console.log('Finding random peer to connect to...');
-
-    // Wait for peer to be fully initialized
-    await new Promise<void>((resolve) => {
-      if (!this.peer) return;
-      
-      const openHandler = () => {
-        this.peer?.off('open', openHandler);
-        resolve();
-      };
-      
-      if (this.peer.open) {
-        resolve();
-      } else {
-        this.peer.on('open', openHandler);
-      }
-    });
+    if (!this.peer?.id) return;
 
     try {
       const peers = await this.updatePeerList();
-      console.log('Available peers:', peers);
-      
-      // Filter out our own ID and already connected peers
-      const availablePeers = peers.filter((id: string) => 
+      const availablePeers = peers.filter(id => 
         id !== this.peer?.id && !this.connections.has(id)
       );
 
       if (availablePeers.length > 0) {
-        // Randomly select a peer
         const randomPeer = availablePeers[Math.floor(Math.random() * availablePeers.length)];
-        console.log('Attempting to connect to random peer:', randomPeer);
+        console.log('Attempting to connect to peer:', randomPeer);
 
         if (isAudioCall && this.stream) {
           const call = this.peer.call(randomPeer, this.stream);
@@ -153,7 +162,7 @@ class WebRTCService {
         console.log('No available peers found, waiting for incoming connections');
       }
     } catch (error) {
-      console.error('Error finding random peer:', error);
+      console.error('Error connecting to random peer:', error);
     }
   }
 
@@ -257,22 +266,6 @@ class WebRTCService {
     });
   }
 
-  sendMessage(message: string): boolean {
-    if (!this.currentConnection) {
-      console.warn('Cannot send message: no active connection');
-      return false;
-    }
-
-    try {
-      console.log('Sending message:', message);
-      this.currentConnection.send(message);
-      return true;
-    } catch (error) {
-      console.error('Error sending message:', error);
-      return false;
-    }
-  }
-
   disconnect() {
     console.log('Disconnecting PeerJS service...');
     
@@ -282,10 +275,8 @@ class WebRTCService {
     }
 
     if (this.stream) {
-      console.log('Stopping audio tracks...');
       this.stream.getTracks().forEach(track => {
         track.stop();
-        console.log('Audio track stopped:', track.id);
       });
       this.stream = null;
     }
@@ -301,7 +292,6 @@ class WebRTCService {
     this.connections.clear();
 
     if (this.peer) {
-      console.log('Destroying peer connection');
       this.peer.destroy();
       this.peer = null;
     }
@@ -310,15 +300,28 @@ class WebRTCService {
   }
 
   setUserCountCallback(callback: ((count: number) => void) | null) {
-    console.log('Setting user count callback');
     this.userCountCallback = callback;
   }
 
   private updateOnlineUsers(count: number) {
-    console.log('Updating online users count:', count);
     this.onlineUsers = Math.max(0, count);
     if (this.userCountCallback) {
       this.userCountCallback(this.onlineUsers);
+    }
+  }
+
+  sendMessage(message: string): boolean {
+    if (!this.currentConnection) {
+      console.warn('Cannot send message: no active connection');
+      return false;
+    }
+
+    try {
+      this.currentConnection.send(message);
+      return true;
+    } catch (error) {
+      console.error('Error sending message:', error);
+      return false;
     }
   }
 }
