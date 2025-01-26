@@ -15,6 +15,7 @@ class WebRTCService {
   private availablePeers: Set<string> = new Set();
   private currentConnection: any = null;
   private peerServer: string = '0.peerjs.com';
+  private heartbeatInterval: NodeJS.Timeout | null = null;
 
   async initializePeer(initiator: boolean = false, isAudioCall: boolean = false): Promise<Peer | null> {
     console.log('Initializing PeerJS connection', { initiator, isAudioCall });
@@ -54,6 +55,7 @@ class WebRTCService {
       });
 
       this.setupPeerEvents();
+      this.startHeartbeat();
       
       // If initiator, try to connect to a random peer
       if (initiator) {
@@ -66,6 +68,39 @@ class WebRTCService {
       console.error('Error initializing peer:', error);
       this.disconnect();
       throw error;
+    }
+  }
+
+  private startHeartbeat() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+    }
+
+    this.heartbeatInterval = setInterval(async () => {
+      await this.updatePeerList();
+    }, 5000); // Update every 5 seconds
+  }
+
+  private async updatePeerList() {
+    try {
+      const response = await fetch(`https://${this.peerServer}/peerjs/peers`, {
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch peers: ${response.statusText}`);
+      }
+
+      const peers = await response.json();
+      this.updateOnlineUsers(peers.length);
+      console.log('Current online peers:', peers.length);
+      
+      return peers;
+    } catch (error) {
+      console.error('Error updating peer list:', error);
+      return [];
     }
   }
 
@@ -91,18 +126,7 @@ class WebRTCService {
     });
 
     try {
-      // Request list of peers from the server
-      const response = await fetch(`https://${this.peerServer}/peerjs/peers`, {
-        headers: {
-          'Content-Type': 'application/json',
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch peers: ${response.statusText}`);
-      }
-
-      const peers = await response.json();
+      const peers = await this.updatePeerList();
       console.log('Available peers:', peers);
       
       // Filter out our own ID and already connected peers
@@ -141,7 +165,7 @@ class WebRTCService {
 
     this.peer.on('open', (id) => {
       console.log('PeerJS connection opened with ID:', id);
-      this.updateOnlineUsers(this.onlineUsers + 1);
+      this.updatePeerList(); // Get initial peer list
     });
 
     this.peer.on('connection', (conn) => {
@@ -160,7 +184,11 @@ class WebRTCService {
     this.peer.on('error', (err) => {
       console.error('PeerJS error:', err);
       if (err.type === 'network' || err.type === 'server-error') {
-        this.disconnect();
+        // Try to reconnect
+        setTimeout(() => {
+          console.log('Attempting to reconnect...');
+          this.peer?.reconnect();
+        }, 3000);
       }
     });
 
@@ -184,6 +212,10 @@ class WebRTCService {
 
     this.currentConnection = conn;
     this.connections.set(conn.peer, conn);
+
+    conn.on('open', () => {
+      console.log('Connection established with:', conn.peer);
+    });
 
     conn.on('data', (data: any) => {
       console.log('Received data:', data);
@@ -244,6 +276,11 @@ class WebRTCService {
   disconnect() {
     console.log('Disconnecting PeerJS service...');
     
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+
     if (this.stream) {
       console.log('Stopping audio tracks...');
       this.stream.getTracks().forEach(track => {
