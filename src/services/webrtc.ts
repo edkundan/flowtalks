@@ -14,6 +14,7 @@ class WebRTCService {
   private connections: Map<string, any> = new Map();
   private availablePeers: Set<string> = new Set();
   private currentConnection: any = null;
+  private peerServer: string = '0.peerjs.com';
 
   async initializePeer(initiator: boolean = false, isAudioCall: boolean = false): Promise<Peer | null> {
     console.log('Initializing PeerJS connection', { initiator, isAudioCall });
@@ -37,7 +38,7 @@ class WebRTCService {
 
       // Create new PeerJS instance with more reliable configuration
       this.peer = new Peer(peerId, {
-        host: '0.peerjs.com',
+        host: this.peerServer,
         secure: true,
         port: 443,
         debug: 3,
@@ -56,7 +57,7 @@ class WebRTCService {
       
       // If initiator, try to connect to a random peer
       if (initiator) {
-        this.findAndConnectToRandomPeer(isAudioCall);
+        await this.findAndConnectToRandomPeer(isAudioCall);
       }
 
       return this.peer;
@@ -71,15 +72,38 @@ class WebRTCService {
   private async findAndConnectToRandomPeer(isAudioCall: boolean) {
     if (!this.peer) return;
 
+    console.log('Finding random peer to connect to...');
+
     // Wait for peer to be fully initialized
-    await new Promise(resolve => {
-      this.peer!.on('open', resolve);
+    await new Promise<void>((resolve) => {
+      if (!this.peer) return;
+      
+      const openHandler = () => {
+        this.peer?.off('open', openHandler);
+        resolve();
+      };
+      
+      if (this.peer.open) {
+        resolve();
+      } else {
+        this.peer.on('open', openHandler);
+      }
     });
 
-    // Get list of available peers from the server
     try {
-      const response = await fetch('https://0.peerjs.com/peerjs/peers');
+      // Request list of peers from the server
+      const response = await fetch(`https://${this.peerServer}/peerjs/peers`, {
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch peers: ${response.statusText}`);
+      }
+
       const peers = await response.json();
+      console.log('Available peers:', peers);
       
       // Filter out our own ID and already connected peers
       const availablePeers = peers.filter((id: string) => 
@@ -95,7 +119,10 @@ class WebRTCService {
           const call = this.peer.call(randomPeer, this.stream);
           this.handleCall(call);
         } else {
-          const conn = this.peer.connect(randomPeer);
+          const conn = this.peer.connect(randomPeer, {
+            reliable: true,
+            serialization: 'json'
+          });
           this.handleConnection(conn);
         }
       } else {
@@ -165,7 +192,9 @@ class WebRTCService {
     conn.on('close', () => {
       console.log('Connection closed:', conn.peer);
       this.connections.delete(conn.peer);
-      this.currentConnection = null;
+      if (this.currentConnection === conn) {
+        this.currentConnection = null;
+      }
       this.updateOnlineUsers(Math.max(0, this.onlineUsers - 1));
     });
   }
@@ -190,7 +219,9 @@ class WebRTCService {
 
     call.on('close', () => {
       console.log('Call ended');
-      this.currentConnection = null;
+      if (this.currentConnection === call) {
+        this.currentConnection = null;
+      }
     });
   }
 
