@@ -15,18 +15,22 @@ class WebRTCService {
   private availablePeers: Set<string> = new Set();
   private currentConnection: any = null;
   private heartbeatInterval: NodeJS.Timeout | null = null;
+  private connectionAttempts: number = 0;
+  private maxConnectionAttempts: number = 3;
 
-  // Update to use your deployed server
   private peerServer = {
     host: '64.227.140.97', // Your DigitalOcean droplet IP
     port: 9000,
     path: '/peerjs/myapp',
-    secure: false, // Set to true if using HTTPS
+    secure: false,
     debug: 3,
     config: {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' },
         {
           urls: 'turn:numb.viagenie.ca',
           username: 'webrtc@live.com',
@@ -45,21 +49,26 @@ class WebRTCService {
 
       if (isAudioCall) {
         console.log('Requesting audio stream...');
-        this.stream = await navigator.mediaDevices.getUserMedia({ 
-          audio: true,
-          video: false
-        });
-        console.log('Audio stream obtained:', this.stream.id);
+        try {
+          this.stream = await navigator.mediaDevices.getUserMedia({ 
+            audio: true,
+            video: false
+          });
+          console.log('Audio stream obtained:', this.stream.id);
+        } catch (error) {
+          console.error('Failed to get audio stream:', error);
+          throw new Error('Failed to access microphone. Please check your permissions.');
+        }
       }
 
       // Generate a random peer ID
       const peerId = Math.random().toString(36).substring(7);
       console.log('Generated peer ID:', peerId);
 
-      // Create new PeerJS instance with our server configuration
+      // Create new PeerJS instance
       this.peer = new Peer(peerId, this.peerServer);
 
-      // Set up event handlers before attempting to connect
+      // Set up event handlers
       this.setupPeerEvents();
       
       // Wait for the peer connection to be established
@@ -70,11 +79,19 @@ class WebRTCService {
         }
 
         const timeout = setTimeout(() => {
-          reject(new Error('Connection timeout'));
-        }, 15000); // Increased timeout to 15 seconds
+          if (this.connectionAttempts < this.maxConnectionAttempts) {
+            this.connectionAttempts++;
+            console.log(`Connection attempt ${this.connectionAttempts} timed out, retrying...`);
+            clearTimeout(timeout);
+            this.initializePeer(initiator, isAudioCall);
+          } else {
+            reject(new Error('Connection timeout after multiple attempts'));
+          }
+        }, 15000);
 
         this.peer.on('open', () => {
           clearTimeout(timeout);
+          this.connectionAttempts = 0;
           console.log('Successfully connected to PeerJS server');
           resolve();
         });
@@ -168,6 +185,7 @@ class WebRTCService {
       }
     } catch (error) {
       console.error('Error connecting to random peer:', error);
+      throw error;
     }
   }
 
@@ -272,7 +290,7 @@ class WebRTCService {
   }
 
   disconnect() {
-    console.log('Disconnecting PeerJS service...');
+    console.log('Disconnecting WebRTC service...');
     
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);
@@ -301,6 +319,7 @@ class WebRTCService {
       this.peer = null;
     }
 
+    this.connectionAttempts = 0;
     this.updateOnlineUsers(0);
   }
 
