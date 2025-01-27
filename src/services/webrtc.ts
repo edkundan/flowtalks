@@ -14,8 +14,27 @@ class WebRTCService {
   private connections: Map<string, any> = new Map();
   private availablePeers: Set<string> = new Set();
   private currentConnection: any = null;
-  private peerServer: string = 'peerjs-server.herokuapp.com'; // Using a different PeerJS server
   private heartbeatInterval: NodeJS.Timeout | null = null;
+
+  // Update to use your deployed server
+  private peerServer = {
+    host: '64.227.140.97', // Your DigitalOcean droplet IP
+    port: 9000,
+    path: '/peerjs/myapp',
+    secure: false, // Set to true if using HTTPS
+    debug: 3,
+    config: {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        {
+          urls: 'turn:numb.viagenie.ca',
+          username: 'webrtc@live.com',
+          credential: 'muazkh'
+        }
+      ]
+    }
+  };
 
   async initializePeer(initiator: boolean = false, isAudioCall: boolean = false): Promise<Peer | null> {
     console.log('Initializing PeerJS connection', { initiator, isAudioCall });
@@ -37,24 +56,8 @@ class WebRTCService {
       const peerId = Math.random().toString(36).substring(7);
       console.log('Generated peer ID:', peerId);
 
-      // Create new PeerJS instance with more reliable configuration
-      this.peer = new Peer(peerId, {
-        host: this.peerServer,
-        secure: true,
-        port: 443,
-        debug: 3,
-        config: {
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            { 
-              urls: 'turn:numb.viagenie.ca',
-              username: 'webrtc@live.com',
-              credential: 'muazkh'
-            }
-          ]
-        }
-      });
+      // Create new PeerJS instance with our server configuration
+      this.peer = new Peer(peerId, this.peerServer);
 
       // Set up event handlers before attempting to connect
       this.setupPeerEvents();
@@ -68,15 +71,17 @@ class WebRTCService {
 
         const timeout = setTimeout(() => {
           reject(new Error('Connection timeout'));
-        }, 10000);
+        }, 15000); // Increased timeout to 15 seconds
 
         this.peer.on('open', () => {
           clearTimeout(timeout);
+          console.log('Successfully connected to PeerJS server');
           resolve();
         });
 
         this.peer.on('error', (err) => {
           clearTimeout(timeout);
+          console.error('PeerJS connection error:', err);
           reject(err);
         });
       });
