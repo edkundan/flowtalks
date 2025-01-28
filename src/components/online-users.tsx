@@ -1,16 +1,16 @@
 import { useEffect, useState } from "react";
 import { Users } from "lucide-react";
-import { webRTCService } from "@/services/webrtc";
+import { socketService } from "@/services/socketService";
 
 export function OnlineUsers() {
   const [userCount, setUserCount] = useState(0);
 
   useEffect(() => {
     console.log('Setting up online users component');
-    webRTCService.setUserCountCallback(setUserCount);
+    socketService.setUserCountCallback(setUserCount);
     return () => {
       console.log('Cleaning up online users component');
-      webRTCService.setUserCountCallback(null);
+      socketService.setUserCountCallback(null);
     };
   }, []);
 

@@ -1,49 +1,75 @@
 const express = require('express');
 const http = require('http');
-const { ExpressPeerServer } = require('peer');
+const { Server } = require('socket.io');
 const cors = require('cors');
 
 const app = express();
-
-// Enable CORS for all routes
 app.use(cors());
 
 const server = http.createServer(app);
-
-const peerServer = ExpressPeerServer(server, {
-  path: '/myapp',
-  allow_discovery: true,
-  debug: 3,
-  proxied: false,
-  pingInterval: 5000,
-  key: 'peerjs',
-  concurrent_limit: 5000
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
 });
 
-app.use('/', peerServer);
+// Track connected users
+let connectedUsers = new Set();
 
-// Track connected peers
-const connectedPeers = new Set();
+io.on('connection', (socket) => {
+  console.log('User connected:', socket.id);
+  connectedUsers.add(socket.id);
+  io.emit('userCount', connectedUsers.size);
 
-peerServer.on('connection', (client) => {
-  console.log('Client connected:', client.getId());
-  connectedPeers.add(client.getId());
-});
+  // Find chat partner
+  socket.on('findPartner', () => {
+    const availableUsers = Array.from(connectedUsers).filter(id => id !== socket.id);
+    if (availableUsers.length > 0) {
+      const randomPartner = availableUsers[Math.floor(Math.random() * availableUsers.length)];
+      socket.partner = randomPartner;
+      const partnerSocket = io.sockets.sockets.get(randomPartner);
+      if (partnerSocket) {
+        partnerSocket.partner = socket.id;
+        socket.emit('partnerFound', randomPartner);
+        partnerSocket.emit('partnerFound', socket.id);
+      }
+    }
+  });
 
-peerServer.on('disconnect', (client) => {
-  console.log('Client disconnected:', client.getId());
-  connectedPeers.delete(client.getId());
+  // Handle chat messages
+  socket.on('chatMessage', (message) => {
+    if (socket.partner) {
+      io.to(socket.partner).emit('chatMessage', {
+        text: message,
+        from: socket.id
+      });
+    }
+  });
+
+  // Handle disconnection
+  socket.on('disconnect', () => {
+    console.log('User disconnected:', socket.id);
+    if (socket.partner) {
+      const partnerSocket = io.sockets.sockets.get(socket.partner);
+      if (partnerSocket) {
+        partnerSocket.partner = null;
+        partnerSocket.emit('partnerDisconnected');
+      }
+    }
+    connectedUsers.delete(socket.id);
+    io.emit('userCount', connectedUsers.size);
+  });
 });
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
     status: 'Server is running',
-    connectedPeers: connectedPeers.size
+    connectedUsers: connectedUsers.size
   });
 });
 
-// Start the server
 const PORT = process.env.PORT || 9000;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server is running on port ${PORT}`);

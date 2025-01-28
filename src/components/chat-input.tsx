@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Send } from "lucide-react";
 import { useState } from "react";
-import { webRTCService } from "@/services/webrtc";
+import { socketService } from "@/services/socketService";
 import { useToast } from "@/components/ui/use-toast";
 
 export function ChatInput() {
@@ -12,7 +12,7 @@ export function ChatInput() {
   const handleSend = () => {
     if (message.trim()) {
       console.log("Attempting to send message:", message);
-      const sent = webRTCService.sendMessage(message);
+      const sent = socketService.sendMessage(message);
       
       if (sent) {
         toast({
@@ -23,7 +23,7 @@ export function ChatInput() {
         toast({
           variant: "destructive",
           title: "Failed to send message",
-          description: "Please ensure you're connected to a peer",
+          description: "Please ensure you're connected to a partner",
         });
       }
       
