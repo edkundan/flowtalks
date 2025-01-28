@@ -7,8 +7,14 @@ class SocketService {
   connect() {
     if (this.socket) return;
 
-    this.socket = io('http://64.227.140.97:9000');
-    console.log('Attempting to connect to socket server...');
+    // Use environment-aware socket connection
+    const socketUrl = process.env.NODE_ENV === 'production'
+      ? 'https://your-socket-server.herokuapp.com' // You'll need to deploy your Socket.IO server separately
+      : 'http://64.227.140.97:9000';
+
+    console.log('Attempting to connect to socket server at:', socketUrl);
+    
+    this.socket = io(socketUrl);
 
     this.socket.on('connect', () => {
       console.log('Connected to socket server');
