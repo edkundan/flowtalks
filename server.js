@@ -1,5 +1,6 @@
 const express = require('express');
-const http = require('http');
+const https = require('https');
+const fs = require('fs');
 const { ExpressPeerServer } = require('peer');
 const cors = require('cors');
 
@@ -7,21 +8,29 @@ const app = express();
 
 // Enable CORS for all routes with specific configuration
 app.use(cors({
-  origin: '*', // Be more specific in production
+  origin: '*',
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-const server = http.createServer(app);
+// SSL/TLS certificates configuration
+// You'll need to replace these with your actual certificate paths
+const options = {
+  key: fs.readFileSync('/path/to/your/private-key.pem'),
+  cert: fs.readFileSync('/path/to/your/certificate.pem')
+};
+
+const server = https.createServer(options, app);
 
 const peerServer = ExpressPeerServer(server, {
   path: '/peerjs/myapp',
   allow_discovery: true,
   debug: 3,
-  proxied: true, // Add this if behind a proxy
-  pingInterval: 5000, // More frequent ping to keep connections alive
-  key: 'peerjs', // Default key
-  concurrent_limit: 5000 // Increase concurrent connection limit
+  ssl: options,
+  proxied: true,
+  pingInterval: 5000,
+  key: 'peerjs',
+  concurrent_limit: 5000
 });
 
 app.use('/', peerServer);
@@ -39,7 +48,7 @@ peerServer.on('disconnect', (client) => {
   connectedPeers.delete(client.getId());
 });
 
-// Health check endpoint that also returns number of connected peers
+// Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
     status: 'Server is running',
@@ -48,7 +57,7 @@ app.get('/health', (req, res) => {
 });
 
 // Start the server
-const PORT = process.env.PORT || 9000;
+const PORT = process.env.PORT || 443;
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server is running on port ${PORT}`);
+  console.log(`Secure server is running on port ${PORT}`);
 });

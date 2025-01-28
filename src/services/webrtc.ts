@@ -19,10 +19,10 @@ class WebRTCService {
   private maxConnectionAttempts: number = 3;
 
   private peerServer = {
-    host: '64.227.140.97', // Your DigitalOcean droplet IP
-    port: 9000,
+    host: '64.227.140.97',
+    port: 443, // Changed to 443 for HTTPS
     path: '/peerjs/myapp',
-    secure: false,
+    secure: true, // Enable secure connection
     debug: 3,
     config: {
       iceServers: [
