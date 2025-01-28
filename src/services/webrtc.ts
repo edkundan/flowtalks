@@ -1,11 +1,5 @@
 import Peer from 'peerjs';
 
-interface PeerState {
-  peer: Peer | null;
-  connected: boolean;
-  error: Error | null;
-}
-
 class WebRTCService {
   private peer: Peer | null = null;
   private stream: MediaStream | null = null;
@@ -20,9 +14,9 @@ class WebRTCService {
 
   private peerServer = {
     host: '64.227.140.97',
-    port: 443, // Changed to 443 for HTTPS
-    path: '/peerjs/myapp',
-    secure: true, // Enable secure connection
+    port: 9000,
+    path: '/myapp',
+    secure: false,
     debug: 3,
     config: {
       iceServers: [
@@ -31,94 +25,9 @@ class WebRTCService {
         { urls: 'stun:stun2.l.google.com:19302' },
         { urls: 'stun:stun3.l.google.com:19302' },
         { urls: 'stun:stun4.l.google.com:19302' },
-        {
-          urls: 'turn:numb.viagenie.ca',
-          username: 'webrtc@live.com',
-          credential: 'muazkh'
-        }
       ]
     }
   };
-
-  async initializePeer(initiator: boolean = false, isAudioCall: boolean = false): Promise<Peer | null> {
-    console.log('Initializing PeerJS connection', { initiator, isAudioCall });
-    
-    try {
-      // Cleanup any existing peer connection
-      this.disconnect();
-
-      if (isAudioCall) {
-        console.log('Requesting audio stream...');
-        try {
-          this.stream = await navigator.mediaDevices.getUserMedia({ 
-            audio: true,
-            video: false
-          });
-          console.log('Audio stream obtained:', this.stream.id);
-        } catch (error) {
-          console.error('Failed to get audio stream:', error);
-          throw new Error('Failed to access microphone. Please check your permissions.');
-        }
-      }
-
-      // Generate a random peer ID
-      const peerId = Math.random().toString(36).substring(7);
-      console.log('Generated peer ID:', peerId);
-
-      // Create new PeerJS instance
-      this.peer = new Peer(peerId, this.peerServer);
-
-      // Set up event handlers
-      this.setupPeerEvents();
-      
-      // Wait for the peer connection to be established
-      await new Promise<void>((resolve, reject) => {
-        if (!this.peer) {
-          reject(new Error('Peer not initialized'));
-          return;
-        }
-
-        const timeout = setTimeout(() => {
-          if (this.connectionAttempts < this.maxConnectionAttempts) {
-            this.connectionAttempts++;
-            console.log(`Connection attempt ${this.connectionAttempts} timed out, retrying...`);
-            clearTimeout(timeout);
-            this.initializePeer(initiator, isAudioCall);
-          } else {
-            reject(new Error('Connection timeout after multiple attempts'));
-          }
-        }, 15000);
-
-        this.peer.on('open', () => {
-          clearTimeout(timeout);
-          this.connectionAttempts = 0;
-          console.log('Successfully connected to PeerJS server');
-          resolve();
-        });
-
-        this.peer.on('error', (err) => {
-          clearTimeout(timeout);
-          console.error('PeerJS connection error:', err);
-          reject(err);
-        });
-      });
-
-      // Start heartbeat after successful connection
-      this.startHeartbeat();
-      
-      // If initiator, try to connect to a random peer
-      if (initiator) {
-        await this.findAndConnectToRandomPeer(isAudioCall);
-      }
-
-      return this.peer;
-
-    } catch (error) {
-      console.error('Error initializing peer:', error);
-      this.disconnect();
-      throw error;
-    }
-  }
 
   private startHeartbeat() {
     if (this.heartbeatInterval) {
@@ -346,6 +255,91 @@ class WebRTCService {
     } catch (error) {
       console.error('Error sending message:', error);
       return false;
+    }
+  }
+
+  async initializePeer(initiator: boolean = false, isAudioCall: boolean = false): Promise<Peer | null> {
+    console.log('Initializing PeerJS connection...', { initiator, isAudioCall });
+    
+    try {
+      // Cleanup any existing peer connection
+      this.disconnect();
+
+      if (isAudioCall) {
+        try {
+          this.stream = await navigator.mediaDevices.getUserMedia({ 
+            audio: true,
+            video: false
+          });
+          console.log('Audio stream obtained:', this.stream.id);
+        } catch (error) {
+          console.error('Failed to get audio stream:', error);
+          throw new Error('Failed to access microphone');
+        }
+      }
+
+      // Generate a random peer ID
+      const peerId = Math.random().toString(36).substring(7);
+      console.log('Generated peer ID:', peerId);
+
+      // Create new PeerJS instance with shorter timeout
+      this.peer = new Peer(peerId, {
+        ...this.peerServer,
+        config: {
+          ...this.peerServer.config,
+          iceTransportPolicy: 'all',
+          reconnectTimer: 3000,
+        }
+      });
+
+      // Set up event handlers
+      this.setupPeerEvents();
+      
+      // Wait for the peer connection to be established with a shorter timeout
+      await new Promise<void>((resolve, reject) => {
+        if (!this.peer) {
+          reject(new Error('Peer not initialized'));
+          return;
+        }
+
+        const timeout = setTimeout(() => {
+          if (this.connectionAttempts < this.maxConnectionAttempts) {
+            this.connectionAttempts++;
+            console.log(`Connection attempt ${this.connectionAttempts} timed out, retrying...`);
+            clearTimeout(timeout);
+            this.initializePeer(initiator, isAudioCall);
+          } else {
+            reject(new Error('Connection timeout after multiple attempts'));
+          }
+        }, 10000); // Reduced timeout to 10 seconds
+
+        this.peer.on('open', () => {
+          clearTimeout(timeout);
+          this.connectionAttempts = 0;
+          console.log('Successfully connected to PeerJS server');
+          resolve();
+        });
+
+        this.peer.on('error', (err) => {
+          clearTimeout(timeout);
+          console.error('PeerJS connection error:', err);
+          reject(err);
+        });
+      });
+
+      // Start heartbeat after successful connection
+      this.startHeartbeat();
+      
+      if (initiator) {
+        await this.findAndConnectToRandomPeer(isAudioCall);
+      }
+
+      return this.peer;
+
+    } catch (error) {
+      console.error('Error initializing peer:', error);
+      this.disconnect();
+      throw error;
     }
   }
 }
