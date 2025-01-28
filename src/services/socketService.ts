@@ -9,8 +9,8 @@ class SocketService {
 
     // Use environment-aware socket connection
     const socketUrl = process.env.NODE_ENV === 'production'
-      ? 'https://your-socket-server.herokuapp.com' // You'll need to deploy your Socket.IO server separately
-      : 'http://64.227.140.97:9000';
+      ? process.env.VITE_SOCKET_SERVER_URL || 'https://your-app-name.onrender.com' 
+      : 'http://localhost:9000';
 
     console.log('Attempting to connect to socket server at:', socketUrl);
     
