@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, push, onValue, set, off } from 'firebase/database';
+import { getDatabase, ref, push, onValue, set, off, serverTimestamp } from 'firebase/database';
 import { getAuth, signInAnonymously } from 'firebase/auth';
 
 const firebaseConfig = {
@@ -19,6 +19,8 @@ class FirebaseService {
   private auth;
   private userId: string | null = null;
   private initialized: boolean = false;
+  private messageCallback: ((message: any) => void) | null = null;
+  private partnerRef: any = null;
 
   constructor() {
     try {
@@ -39,11 +41,22 @@ class FirebaseService {
       this.userId = userCredential.user.uid;
       this.initialized = true;
       console.log('Successfully signed in anonymously:', this.userId);
+      
+      // Set online status
+      const userStatusRef = ref(this.db, `users/${this.userId}/status`);
+      await set(userStatusRef, 'online');
+      
+      // Set offline status on disconnect
+      const connectedRef = ref(this.db, '.info/connected');
+      onValue(connectedRef, (snap) => {
+        if (snap.val() === true && this.userId) {
+          const userStatusRef = ref(this.db, `users/${this.userId}/status`);
+          set(userStatusRef, 'offline');
+        }
+      });
+      
     } catch (error: any) {
       console.error('Anonymous authentication error:', error.code, error.message);
-      if (error.code === 'auth/unauthorized-domain') {
-        console.log('Please add your domain to Firebase Authentication authorized domains');
-      }
     }
   }
 
@@ -60,16 +73,17 @@ class FirebaseService {
       
       // Add self to available users
       await set(userRef, {
-        timestamp: Date.now(),
+        timestamp: serverTimestamp(),
         status: 'searching'
       });
 
       // Listen for partner assignment
       return new Promise((resolve) => {
-        onValue(ref(this.db, `users/${this.userId}/partner`), (snapshot) => {
+        const partnerListener = onValue(ref(this.db, `users/${this.userId}/partner`), (snapshot) => {
           const partnerId = snapshot.val();
           if (partnerId) {
             console.log('Partner found:', partnerId);
+            this.setupChatListener(partnerId);
             resolve(partnerId);
           }
         });
@@ -80,6 +94,30 @@ class FirebaseService {
     }
   }
 
+  private setupChatListener(partnerId: string) {
+    if (!this.userId) return;
+    
+    console.log('Setting up chat listener for partner:', partnerId);
+    const chatRef = ref(this.db, `chats/${partnerId}_${this.userId}`);
+    
+    // Remove any existing listener
+    if (this.partnerRef) {
+      off(this.partnerRef);
+    }
+    
+    this.partnerRef = chatRef;
+    onValue(chatRef, (snapshot) => {
+      const messages = snapshot.val();
+      if (messages && this.messageCallback) {
+        const messageArray = Object.entries(messages).map(([key, value]: [string, any]) => ({
+          id: key,
+          ...value
+        }));
+        this.messageCallback(messageArray);
+      }
+    });
+  }
+
   async sendMessage(message: string) {
     if (!this.initialized || !this.userId) {
       console.log('Cannot send message: Firebase not initialized or user not authenticated');
@@ -87,13 +125,23 @@ class FirebaseService {
     }
     
     try {
-      console.log('Sending message:', message);
-      const chatRef = ref(this.db, `chats/${this.userId}`);
+      const partnerRef = ref(this.db, `users/${this.userId}/partner`);
+      const partnerSnapshot = await get(partnerRef);
+      const partnerId = partnerSnapshot.val();
+      
+      if (!partnerId) {
+        console.log('No partner found to send message to');
+        return false;
+      }
+
+      console.log('Sending message to partner:', partnerId);
+      const chatRef = ref(this.db, `chats/${this.userId}_${partnerId}`);
       await push(chatRef, {
         text: message,
-        timestamp: Date.now(),
+        timestamp: serverTimestamp(),
         senderId: this.userId
       });
+      
       console.log('Message sent successfully');
       return true;
     } catch (error) {
@@ -102,21 +150,8 @@ class FirebaseService {
     }
   }
 
-  onMessageReceived(callback: (message: { text: string; from: string }) => void) {
-    if (!this.initialized || !this.userId) {
-      console.log('Cannot receive messages: Firebase not initialized or user not authenticated');
-      return;
-    }
-    
-    console.log('Setting up message listener...');
-    const chatRef = ref(this.db, `chats/${this.userId}`);
-    onValue(chatRef, (snapshot) => {
-      const message = snapshot.val();
-      if (message) {
-        console.log('Message received:', message);
-        callback(message);
-      }
-    });
+  setMessageCallback(callback: (message: any) => void) {
+    this.messageCallback = callback;
   }
 
   cleanup() {
@@ -128,9 +163,19 @@ class FirebaseService {
       const userRef = ref(this.db, `availableUsers/${this.userId}`);
       set(userRef, null);
       
-      // Remove all listeners
-      off(ref(this.db, `users/${this.userId}/partner`));
-      off(ref(this.db, `chats/${this.userId}`));
+      // Set status to offline
+      const userStatusRef = ref(this.db, `users/${this.userId}/status`);
+      set(userStatusRef, 'offline');
+      
+      // Remove partner assignment
+      const partnerRef = ref(this.db, `users/${this.userId}/partner`);
+      set(partnerRef, null);
+      
+      // Remove chat listeners
+      if (this.partnerRef) {
+        off(this.partnerRef);
+        this.partnerRef = null;
+      }
       
       console.log('Cleanup completed successfully');
     } catch (error) {

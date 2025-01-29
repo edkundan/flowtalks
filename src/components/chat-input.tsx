@@ -15,11 +15,13 @@ export function ChatInput() {
       const sent = await firebaseService.sendMessage(message);
       
       if (sent) {
+        console.log("Message sent successfully");
         toast({
           title: "Message sent",
           description: "Your message has been sent successfully",
         });
       } else {
+        console.log("Failed to send message");
         toast({
           variant: "destructive",
           title: "Failed to send message",
