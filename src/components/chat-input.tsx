@@ -2,17 +2,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Send } from "lucide-react";
 import { useState } from "react";
-import { socketService } from "@/services/socketService";
+import { firebaseService } from "@/services/firebaseService";
 import { useToast } from "@/components/ui/use-toast";
 
 export function ChatInput() {
   const [message, setMessage] = useState("");
   const { toast } = useToast();
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (message.trim()) {
       console.log("Attempting to send message:", message);
-      const sent = socketService.sendMessage(message);
+      const sent = await firebaseService.sendMessage(message);
       
       if (sent) {
         toast({
@@ -23,7 +23,7 @@ export function ChatInput() {
         toast({
           variant: "destructive",
           title: "Failed to send message",
-          description: "Please ensure you're connected to a partner",
+          description: "Please ensure you're connected to chat",
         });
       }
       

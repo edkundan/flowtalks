@@ -10,9 +10,8 @@ import { SettingsDialog } from "@/components/SettingsDialog";
 import { DisclaimerDialog } from "@/components/DisclaimerDialog";
 import { useSettings } from "@/hooks/use-settings";
 import { ConnectingState } from "@/components/ConnectingState";
-import { webRTCService } from "@/services/webrtc";
+import { firebaseService } from "@/services/firebaseService";
 import { useToast } from "@/components/ui/use-toast";
-import { OnlineUsers } from "@/components/online-users";
 
 const Index = () => {
   const [isConnecting, setIsConnecting] = useState(false);
@@ -24,66 +23,29 @@ const Index = () => {
 
   const handleConnect = async () => {
     setIsConnecting(true);
-    let retryCount = 0;
-    const maxRetries = 3;
-
-    const attemptConnection = async () => {
-      try {
-        console.log("Initializing PeerJS connection...");
-        const peer = await webRTCService.initializePeer(true, communicationType === "audio");
-        
-        if (!peer) {
-          throw new Error("Failed to create peer connection");
-        }
-
-        peer.on('open', () => {
-          setIsConnecting(false);
-          setIsConnected(true);
-          toast({
-            title: "Connected!",
-            description: `Ready for ${communicationType === "chat" ? "chat" : "call"}. Waiting for a partner...`,
-          });
+    try {
+      const partnerId = await firebaseService.findPartner();
+      if (partnerId) {
+        setIsConnecting(false);
+        setIsConnected(true);
+        toast({
+          title: "Connected!",
+          description: `Ready for ${communicationType === "chat" ? "chat" : "call"}`,
         });
-
-        peer.on('error', (err) => {
-          console.error('Peer connection error:', err);
-          if (retryCount < maxRetries) {
-            retryCount++;
-            console.log(`Retrying connection (attempt ${retryCount}/${maxRetries})...`);
-            attemptConnection();
-          } else {
-            setIsConnecting(false);
-            setIsConnected(false);
-            toast({
-              variant: "destructive",
-              title: "Connection failed",
-              description: "Unable to establish connection after multiple attempts. Please try again later.",
-            });
-          }
-        });
-
-      } catch (error) {
-        console.error("Failed to initialize PeerJS:", error);
-        if (retryCount < maxRetries) {
-          retryCount++;
-          console.log(`Retrying connection (attempt ${retryCount}/${maxRetries})...`);
-          attemptConnection();
-        } else {
-          setIsConnecting(false);
-          toast({
-            variant: "destructive",
-            title: "Connection failed",
-            description: "Unable to establish connection after multiple attempts. Please try again later.",
-          });
-        }
       }
-    };
-
-    attemptConnection();
+    } catch (error) {
+      console.error('Connection error:', error);
+      setIsConnecting(false);
+      toast({
+        variant: "destructive",
+        title: "Connection failed",
+        description: "Unable to establish connection. Please try again later.",
+      });
+    }
   };
 
   const handleDisconnect = () => {
-    webRTCService.disconnect();
+    firebaseService.cleanup();
     setIsConnected(false);
     toast({
       title: "Disconnected",
@@ -93,7 +55,7 @@ const Index = () => {
 
   useEffect(() => {
     return () => {
-      webRTCService.disconnect();
+      firebaseService.cleanup();
     };
   }, []);
 
