@@ -12,6 +12,7 @@ import { useSettings } from "@/hooks/use-settings";
 import { ConnectingState } from "@/components/ConnectingState";
 import { firebaseService } from "@/services/firebaseService";
 import { useToast } from "@/components/ui/use-toast";
+import { OnlineUsers } from "@/components/online-users";
 
 const Index = () => {
   const [isConnecting, setIsConnecting] = useState(false);
