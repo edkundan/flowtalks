@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, push, onValue, set, off, serverTimestamp, get, update } from 'firebase/database';
+import { getDatabase, ref, push, onValue, set, off, serverTimestamp, get, update, Unsubscribe } from 'firebase/database';
 import { getAuth, signInAnonymously } from 'firebase/auth';
 
 const firebaseConfig = {
@@ -22,7 +22,7 @@ class FirebaseService {
   private messageCallback: ((message: any) => void) | null = null;
   private partnerRef: any = null;
   private availableUsersRef: any = null;
-  private connectionRef: any = null;
+  private connectionRef: Unsubscribe | null = null;
   private currentChatRoom: string | null = null;
 
   constructor() {
@@ -53,7 +53,7 @@ class FirebaseService {
         const userStatusRef = ref(this.db, `users/${this.userId}`);
         const connectedRef = ref(this.db, '.info/connected');
         
-        onValue(connectedRef, async (snap) => {
+        const unsubscribe = onValue(connectedRef, async (snap) => {
           if (snap.val() === true && this.userId) {
             console.log('Connected to Firebase Realtime Database');
             
@@ -63,12 +63,8 @@ class FirebaseService {
               partner: null
             });
             
-            onValue(connectedRef, (snapshot) => {
-              if (snapshot.val() === false) {
-                console.log('Disconnected from Firebase');
-                this.cleanup();
-              }
-            });
+            // Store the unsubscribe function
+            this.connectionRef = unsubscribe;
           }
         });
       }
