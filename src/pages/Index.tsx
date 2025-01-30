@@ -45,9 +45,11 @@ const Index = () => {
         }
       }
 
+      console.log('Initiating connection...');
       const partnerId = await firebaseService.findPartner();
+      
       if (partnerId) {
-        console.log('Partner found, connecting...');
+        console.log('Partner found, connecting...', partnerId);
         setIsConnecting(false);
         setIsConnected(true);
         toast({
@@ -55,13 +57,13 @@ const Index = () => {
           description: `Ready for ${communicationType === "chat" ? "chat" : "call"}`,
         });
       } else {
-        console.log('No partner found');
-        setIsConnecting(false);
+        console.log('No partner found, waiting...');
         toast({
-          variant: "destructive",
-          title: "Connection failed",
-          description: "No available partners found. Please try again.",
+          title: "Searching...",
+          description: "Looking for available partners.",
         });
+        // Keep the connecting state active while waiting
+        // The Firebase service will handle the connection when a partner is found
       }
     } catch (error) {
       console.error('Connection error:', error);

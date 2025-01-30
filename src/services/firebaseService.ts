@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, push, onValue, set, off, serverTimestamp, get } from 'firebase/database';
+import { getDatabase, ref, push, onValue, set, off, serverTimestamp, get, update } from 'firebase/database';
 import { getAuth, signInAnonymously } from 'firebase/auth';
 
 const firebaseConfig = {
@@ -44,7 +44,6 @@ class FirebaseService {
       this.initialized = true;
       console.log('Successfully signed in anonymously:', this.userId);
       
-      // Set online status and cleanup on disconnect
       if (this.userId) {
         const userStatusRef = ref(this.db, `users/${this.userId}`);
         const connectedRef = ref(this.db, '.info/connected');
@@ -52,7 +51,6 @@ class FirebaseService {
         onValue(connectedRef, async (snap) => {
           if (snap.val() === true && this.userId) {
             console.log('Connected to Firebase Realtime Database');
-            const userStatusRef = ref(this.db, `users/${this.userId}`);
             
             // Set online status
             await set(userStatusRef, {
@@ -77,7 +75,7 @@ class FirebaseService {
     }
   }
 
-  async findPartner() {
+  async findPartner(): Promise<string | null> {
     if (!this.initialized || !this.userId) {
       console.error('Firebase not initialized or user not authenticated');
       return null;
@@ -85,59 +83,65 @@ class FirebaseService {
     
     try {
       console.log('Finding partner...');
-      this.availableUsersRef = ref(this.db, 'availableUsers');
-      const userRef = ref(this.db, `availableUsers/${this.userId}`);
+      const availableUsersRef = ref(this.db, 'availableUsers');
+      const snapshot = await get(availableUsersRef);
       
-      // Add self to available users
-      await set(userRef, {
-        timestamp: serverTimestamp(),
-        status: 'searching'
+      // Get all available users except self
+      const availableUsers = [];
+      snapshot.forEach((childSnapshot) => {
+        const userId = childSnapshot.key;
+        if (userId !== this.userId) {
+          availableUsers.push(userId);
+        }
       });
 
-      console.log('Added self to available users pool');
+      if (availableUsers.length > 0) {
+        // Randomly select a partner
+        const randomPartner = availableUsers[Math.floor(Math.random() * availableUsers.length)];
+        console.log('Found potential partner:', randomPartner);
 
-      // Listen for partner assignment
-      return new Promise((resolve) => {
-        const partnerListener = onValue(ref(this.db, `users/${this.userId}/partner`), async (snapshot) => {
-          const partnerId = snapshot.val();
-          
-          if (partnerId) {
-            console.log('Partner found:', partnerId);
-            
-            // Verify partner exists and is available
-            const partnerStatusRef = ref(this.db, `users/${partnerId}`);
-            const partnerSnapshot = await get(partnerStatusRef);
-            
-            if (partnerSnapshot.exists() && partnerSnapshot.val().status === 'online') {
-              console.log('Partner is online and available');
-              
-              // Set up chat room
-              const chatRoomId = [this.userId, partnerId].sort().join('_');
-              const chatRoomRef = ref(this.db, `chats/${chatRoomId}`);
-              
-              await set(chatRoomRef, {
-                created: serverTimestamp(),
-                participants: {
-                  [this.userId!]: true,
-                  [partnerId]: true
-                }
-              });
+        // Create a chat room
+        const chatRoomId = [this.userId, randomPartner].sort().join('_');
+        const updates: any = {};
+        
+        // Update both users' partner status
+        updates[`users/${this.userId}/partner`] = randomPartner;
+        updates[`users/${randomPartner}/partner`] = this.userId;
+        updates[`availableUsers/${this.userId}`] = null;
+        updates[`availableUsers/${randomPartner}`] = null;
+        updates[`chats/${chatRoomId}`] = {
+          created: serverTimestamp(),
+          participants: {
+            [this.userId]: true,
+            [randomPartner]: true
+          }
+        };
 
-              // Remove from available users
-              await set(ref(this.db, `availableUsers/${this.userId}`), null);
-              
+        await update(ref(this.db), updates);
+        console.log('Successfully paired with partner:', randomPartner);
+        this.setupChatListener(randomPartner);
+        return randomPartner;
+      } else {
+        // Add self to available users if no partner found
+        console.log('No available partners, adding self to pool');
+        await set(ref(this.db, `availableUsers/${this.userId}`), {
+          timestamp: serverTimestamp(),
+          status: 'searching'
+        });
+
+        // Listen for partner assignment
+        return new Promise((resolve) => {
+          const partnerListener = onValue(ref(this.db, `users/${this.userId}/partner`), async (snapshot) => {
+            const partnerId = snapshot.val();
+            if (partnerId) {
+              console.log('Partner found:', partnerId);
+              off(ref(this.db, `users/${this.userId}/partner`), partnerListener);
               this.setupChatListener(partnerId);
               resolve(partnerId);
-            } else {
-              console.log('Partner not available, continuing search...');
-              if (this.userId) {
-                await set(ref(this.db, `users/${this.userId}/partner`), null);
-              }
-              resolve(null);
             }
-          }
+          });
         });
-      });
+      }
     } catch (error) {
       console.error('Error finding partner:', error);
       return null;
