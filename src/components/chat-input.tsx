@@ -1,13 +1,17 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Send } from "lucide-react";
+import { Send, Smile } from "lucide-react";
 import { useState } from "react";
 import { firebaseService } from "@/services/firebaseService";
 import { useToast } from "@/components/ui/use-toast";
+import data from '@emoji-mart/data'
+import Picker from '@emoji-mart/react'
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 export function ChatInput() {
   const [message, setMessage] = useState("");
   const { toast } = useToast();
+  const [showEmoji, setShowEmoji] = useState(false);
 
   const handleSend = async () => {
     if (message.trim()) {
@@ -33,8 +37,32 @@ export function ChatInput() {
     }
   };
 
+  const addEmoji = (emoji: any) => {
+    setMessage(prev => prev + emoji.native);
+    setShowEmoji(false);
+  };
+
   return (
     <div className="flex items-center gap-2 p-4 bg-background/90 backdrop-blur-sm rounded-lg">
+      <Popover open={showEmoji} onOpenChange={setShowEmoji}>
+        <PopoverTrigger asChild>
+          <Button 
+            variant="ghost" 
+            size="icon"
+            className="hover:bg-primary/20"
+          >
+            <Smile className="h-5 w-5" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-80 p-0">
+          <Picker 
+            data={data} 
+            onEmojiSelect={addEmoji}
+            theme="dark"
+          />
+        </PopoverContent>
+      </Popover>
+      
       <Input
         value={message}
         onChange={(e) => setMessage(e.target.value)}
@@ -44,9 +72,10 @@ export function ChatInput() {
       />
       <Button
         onClick={handleSend}
-        className="px-8 py-6 h-14 text-lg font-medium bg-primary hover:bg-primary/90 transition-all duration-200 transform hover:scale-105 active:scale-95"
+        size="icon"
+        className="h-10 w-10 rounded-full bg-primary hover:bg-primary/90 transition-all duration-200"
       >
-        Send Message
+        <Send className="h-5 w-5" />
       </Button>
     </div>
   );

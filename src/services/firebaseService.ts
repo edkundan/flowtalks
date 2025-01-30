@@ -165,12 +165,84 @@ class FirebaseService {
   }
 
   async setupAudioCall(localStream: MediaStream) {
+    console.log('Setting up audio call with stream:', localStream.id);
     this.localStream = localStream;
+    
     if (this.currentChatRoom) {
       const audioRef = ref(this.db, `chats/${this.currentChatRoom}/audio`);
+      
+      // Set up WebRTC connection
+      const configuration = {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+        ]
+      };
+      
+      const peerConnection = new RTCPeerConnection(configuration);
+      
+      // Add local stream tracks to peer connection
+      localStream.getTracks().forEach(track => {
+        console.log('Adding track to peer connection:', track.kind);
+        peerConnection.addTrack(track, localStream);
+      });
+
+      // Listen for remote stream
+      peerConnection.ontrack = (event) => {
+        console.log('Received remote track:', event.track.kind);
+        const [remoteStream] = event.streams;
+        this.remoteStream = remoteStream;
+        
+        // Create audio element and play remote stream
+        const audioElement = new Audio();
+        audioElement.srcObject = remoteStream;
+        audioElement.play().catch(error => {
+          console.error('Error playing remote audio:', error);
+        });
+      };
+
+      // Handle ICE candidates
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log('New ICE candidate:', event.candidate);
+          update(ref(this.db, `chats/${this.currentChatRoom}/audio/candidates`), {
+            [Date.now()]: event.candidate.toJSON()
+          });
+        }
+      };
+
+      // Create and send offer
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      
       await set(audioRef, {
-        enabled: true,
+        offer: { sdp: offer.sdp, type: offer.type },
         timestamp: serverTimestamp()
+      });
+
+      // Listen for answer
+      onValue(ref(this.db, `chats/${this.currentChatRoom}/audio`), async (snapshot) => {
+        const data = snapshot.val();
+        if (!data) return;
+
+        if (data.answer && !peerConnection.currentRemoteDescription) {
+          console.log('Received answer:', data.answer);
+          const answerDescription = new RTCSessionDescription(data.answer);
+          await peerConnection.setRemoteDescription(answerDescription);
+        }
+      });
+
+      // Listen for ICE candidates
+      onValue(ref(this.db, `chats/${this.currentChatRoom}/audio/candidates`), (snapshot) => {
+        const data = snapshot.val();
+        if (!data) return;
+
+        Object.values(data).forEach((candidate: any) => {
+          if (candidate) {
+            console.log('Adding ICE candidate:', candidate);
+            peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+          }
+        });
       });
     }
   }
@@ -259,7 +331,10 @@ class FirebaseService {
       }
 
       if (this.localStream) {
-        this.localStream.getTracks().forEach(track => track.stop());
+        this.localStream.getTracks().forEach(track => {
+          console.log('Stopping track:', track.kind);
+          track.stop();
+        });
         this.localStream = null;
       }
       
