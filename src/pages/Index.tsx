@@ -24,14 +24,43 @@ const Index = () => {
 
   const handleConnect = async () => {
     setIsConnecting(true);
+    
     try {
+      // Request audio permissions if it's an audio call
+      if (communicationType === "audio") {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          console.log('Audio permissions granted');
+          // Stop the stream since we'll request it again when actually starting the call
+          stream.getTracks().forEach(track => track.stop());
+        } catch (error) {
+          console.error('Audio permission error:', error);
+          toast({
+            variant: "destructive",
+            title: "Microphone Access Required",
+            description: "Please allow microphone access for audio calls.",
+          });
+          setIsConnecting(false);
+          return;
+        }
+      }
+
       const partnerId = await firebaseService.findPartner();
       if (partnerId) {
+        console.log('Partner found, connecting...');
         setIsConnecting(false);
         setIsConnected(true);
         toast({
           title: "Connected!",
           description: `Ready for ${communicationType === "chat" ? "chat" : "call"}`,
+        });
+      } else {
+        console.log('No partner found');
+        setIsConnecting(false);
+        toast({
+          variant: "destructive",
+          title: "Connection failed",
+          description: "No available partners found. Please try again.",
         });
       }
     } catch (error) {

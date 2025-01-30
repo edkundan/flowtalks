@@ -22,6 +22,7 @@ class FirebaseService {
   private messageCallback: ((message: any) => void) | null = null;
   private partnerRef: any = null;
   private availableUsersRef: any = null;
+  private connectionRef: any = null;
 
   constructor() {
     try {
@@ -46,33 +47,39 @@ class FirebaseService {
       // Set online status and cleanup on disconnect
       if (this.userId) {
         const userStatusRef = ref(this.db, `users/${this.userId}`);
-        await set(userStatusRef, {
-          status: 'online',
-          lastSeen: serverTimestamp(),
-          partner: null
-        });
-        
-        // Set offline status on disconnect
         const connectedRef = ref(this.db, '.info/connected');
+        
         onValue(connectedRef, async (snap) => {
           if (snap.val() === true && this.userId) {
+            console.log('Connected to Firebase Realtime Database');
             const userStatusRef = ref(this.db, `users/${this.userId}`);
+            
+            // Set online status
             await set(userStatusRef, {
-              status: 'offline',
+              status: 'online',
               lastSeen: serverTimestamp(),
               partner: null
+            });
+            
+            // Set offline status on disconnect
+            onValue(connectedRef, (snapshot) => {
+              if (snapshot.val() === false) {
+                console.log('Disconnected from Firebase');
+                this.cleanup();
+              }
             });
           }
         });
       }
     } catch (error: any) {
       console.error('Anonymous authentication error:', error.code, error.message);
+      throw error;
     }
   }
 
   async findPartner() {
     if (!this.initialized || !this.userId) {
-      console.log('Firebase not initialized or user not authenticated');
+      console.error('Firebase not initialized or user not authenticated');
       return null;
     }
     
@@ -99,14 +106,15 @@ class FirebaseService {
             
             // Verify partner exists and is available
             const partnerStatusRef = ref(this.db, `users/${partnerId}`);
-            const partnerStatus = await get(partnerStatusRef);
+            const partnerSnapshot = await get(partnerStatusRef);
             
-            if (partnerStatus.exists() && partnerStatus.val().status === 'online') {
+            if (partnerSnapshot.exists() && partnerSnapshot.val().status === 'online') {
+              console.log('Partner is online and available');
+              
               // Set up chat room
               const chatRoomId = [this.userId, partnerId].sort().join('_');
               const chatRoomRef = ref(this.db, `chats/${chatRoomId}`);
               
-              // Initialize chat room if it doesn't exist
               await set(chatRoomRef, {
                 created: serverTimestamp(),
                 participants: {
@@ -115,6 +123,9 @@ class FirebaseService {
                 }
               });
 
+              // Remove from available users
+              await set(ref(this.db, `availableUsers/${this.userId}`), null);
+              
               this.setupChatListener(partnerId);
               resolve(partnerId);
             } else {
@@ -218,6 +229,12 @@ class FirebaseService {
       if (this.partnerRef) {
         off(this.partnerRef);
         this.partnerRef = null;
+      }
+      
+      // Remove connection listener
+      if (this.connectionRef) {
+        off(this.connectionRef);
+        this.connectionRef = null;
       }
       
       console.log('Cleanup completed successfully');
