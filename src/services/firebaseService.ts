@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, push, onValue, set, off, serverTimestamp, get, update, Unsubscribe } from 'firebase/database';
+import { getDatabase, ref, push, onValue, set, off, serverTimestamp, get, update, Database, DatabaseReference } from 'firebase/database';
 import { getAuth, signInAnonymously } from 'firebase/auth';
 
 const firebaseConfig = {
@@ -15,15 +15,17 @@ const firebaseConfig = {
 
 class FirebaseService {
   private app;
-  private db;
+  private db: Database;
   private auth;
   private userId: string | null = null;
   private initialized: boolean = false;
   private messageCallback: ((message: any) => void) | null = null;
-  private partnerRef: any = null;
-  private availableUsersRef: any = null;
-  private connectionRef: Unsubscribe | null = null;
+  private partnerRef: DatabaseReference | null = null;
+  private availableUsersRef: DatabaseReference | null = null;
   private currentChatRoom: string | null = null;
+  private localStream: MediaStream | null = null;
+  private remoteStream: MediaStream | null = null;
+  private userCountCallback: ((count: number) => void) | null = null;
 
   constructor() {
     try {
@@ -32,9 +34,25 @@ class FirebaseService {
       this.db = getDatabase(this.app);
       this.auth = getAuth(this.app);
       this.initializeAuth();
+      this.setupOnlineUsersCounter();
     } catch (error) {
       console.error('Firebase initialization error:', error);
     }
+  }
+
+  private setupOnlineUsersCounter() {
+    const onlineUsersRef = ref(this.db, 'onlineUsers');
+    onValue(onlineUsersRef, (snapshot) => {
+      const count = snapshot.size;
+      console.log('Online users count:', count);
+      if (this.userCountCallback) {
+        this.userCountCallback(count);
+      }
+    });
+  }
+
+  setUserCountCallback(callback: (count: number) => void) {
+    this.userCountCallback = callback;
   }
 
   getCurrentUserId() {
@@ -51,20 +69,23 @@ class FirebaseService {
       
       if (this.userId) {
         const userStatusRef = ref(this.db, `users/${this.userId}`);
-        const connectedRef = ref(this.db, '.info/connected');
+        const onlineUserRef = ref(this.db, `onlineUsers/${this.userId}`);
         
-        const unsubscribe = onValue(connectedRef, async (snap) => {
-          if (snap.val() === true && this.userId) {
-            console.log('Connected to Firebase Realtime Database');
-            
-            await set(userStatusRef, {
-              status: 'online',
-              lastSeen: serverTimestamp(),
-              partner: null
-            });
-            
-            // Store the unsubscribe function
-            this.connectionRef = unsubscribe;
+        await set(userStatusRef, {
+          status: 'online',
+          lastSeen: serverTimestamp(),
+          partner: null
+        });
+
+        await set(onlineUserRef, {
+          timestamp: serverTimestamp()
+        });
+
+        // Handle disconnection
+        const connectedRef = ref(this.db, '.info/connected');
+        onValue(connectedRef, (snap) => {
+          if (snap.val() === false && this.userId) {
+            this.cleanup();
           }
         });
       }
@@ -94,7 +115,7 @@ class FirebaseService {
       });
 
       if (availableUsers.length > 0) {
-        const randomPartner = availableUsers[Math.floor(Math.random() * availableUsers.length)];
+        const randomPartner = availableUsers[0]; // Take first available user
         console.log('Found potential partner:', randomPartner);
 
         const chatRoomId = [this.userId, randomPartner].sort().join('_');
@@ -126,11 +147,11 @@ class FirebaseService {
 
         return new Promise((resolve) => {
           const userRef = ref(this.db, `users/${this.userId}/partner`);
-          const partnerListener = onValue(userRef, async (snapshot) => {
+          onValue(userRef, async (snapshot) => {
             const partnerId = snapshot.val();
             if (partnerId) {
               console.log('Partner found:', partnerId);
-              off(userRef, partnerListener);
+              off(userRef);
               this.setupChatListener(partnerId);
               resolve(partnerId);
             }
@@ -140,6 +161,17 @@ class FirebaseService {
     } catch (error) {
       console.error('Error finding partner:', error);
       return null;
+    }
+  }
+
+  async setupAudioCall(localStream: MediaStream) {
+    this.localStream = localStream;
+    if (this.currentChatRoom) {
+      const audioRef = ref(this.db, `chats/${this.currentChatRoom}/audio`);
+      await set(audioRef, {
+        enabled: true,
+        timestamp: serverTimestamp()
+      });
     }
   }
 
@@ -211,21 +243,24 @@ class FirebaseService {
         lastSeen: serverTimestamp(),
         partner: null
       });
+
+      const onlineUserRef = ref(this.db, `onlineUsers/${this.userId}`);
+      set(onlineUserRef, null);
       
       if (this.partnerRef) {
         off(this.partnerRef);
         this.partnerRef = null;
-      }
-      
-      if (this.connectionRef) {
-        off(this.connectionRef);
-        this.connectionRef = null;
       }
 
       if (this.currentChatRoom) {
         const chatRef = ref(this.db, `chats/${this.currentChatRoom}/messages`);
         off(chatRef);
         this.currentChatRoom = null;
+      }
+
+      if (this.localStream) {
+        this.localStream.getTracks().forEach(track => track.stop());
+        this.localStream = null;
       }
       
       console.log('Cleanup completed successfully');

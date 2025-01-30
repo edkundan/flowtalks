@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { ChatControls } from "@/components/chat-controls";
 import { ChatInput } from "@/components/chat-input";
 import { MessageSquare, Phone } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { Header } from "@/components/Header";
@@ -29,16 +29,15 @@ const Index = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const { isOpen: isSettingsOpen, closeSettings } = useSettings();
   const { toast } = useToast();
+  const localStreamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
-    // Set up message listener when component mounts
     firebaseService.setMessageCallback((newMessages: Message[]) => {
       console.log("Received new messages:", newMessages);
       setMessages(newMessages);
     });
 
     return () => {
-      // Cleanup on unmount
       firebaseService.cleanup();
     };
   }, []);
@@ -49,9 +48,13 @@ const Index = () => {
     try {
       if (communicationType === "audio") {
         try {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const stream = await navigator.mediaDevices.getUserMedia({ 
+            audio: true,
+            video: false 
+          });
           console.log('Audio permissions granted');
-          stream.getTracks().forEach(track => track.stop());
+          localStreamRef.current = stream;
+          await firebaseService.setupAudioCall(stream);
         } catch (error) {
           console.error('Audio permission error:', error);
           toast({
@@ -94,6 +97,10 @@ const Index = () => {
   };
 
   const handleDisconnect = () => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+      localStreamRef.current = null;
+    }
     firebaseService.cleanup();
     setIsConnected(false);
     setMessages([]);
@@ -102,6 +109,8 @@ const Index = () => {
       description: "You've been disconnected from the chat.",
     });
   };
+
+  // ... keep existing code (JSX for the component)
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
