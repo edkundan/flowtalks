@@ -14,24 +14,43 @@ import { firebaseService } from "@/services/firebaseService";
 import { useToast } from "@/components/ui/use-toast";
 import { OnlineUsers } from "@/components/online-users";
 
+interface Message {
+  id: string;
+  text: string;
+  senderId: string;
+  timestamp: number;
+}
+
 const Index = () => {
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [communicationType, setCommunicationType] = useState<"chat" | "audio">("chat");
   const [showDisclaimer, setShowDisclaimer] = useState(true);
+  const [messages, setMessages] = useState<Message[]>([]);
   const { isOpen: isSettingsOpen, closeSettings } = useSettings();
   const { toast } = useToast();
+
+  useEffect(() => {
+    // Set up message listener when component mounts
+    firebaseService.setMessageCallback((newMessages: Message[]) => {
+      console.log("Received new messages:", newMessages);
+      setMessages(newMessages);
+    });
+
+    return () => {
+      // Cleanup on unmount
+      firebaseService.cleanup();
+    };
+  }, []);
 
   const handleConnect = async () => {
     setIsConnecting(true);
     
     try {
-      // Request audio permissions if it's an audio call
       if (communicationType === "audio") {
         try {
           const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
           console.log('Audio permissions granted');
-          // Stop the stream since we'll request it again when actually starting the call
           stream.getTracks().forEach(track => track.stop());
         } catch (error) {
           console.error('Audio permission error:', error);
@@ -62,8 +81,6 @@ const Index = () => {
           title: "Searching...",
           description: "Looking for available partners.",
         });
-        // Keep the connecting state active while waiting
-        // The Firebase service will handle the connection when a partner is found
       }
     } catch (error) {
       console.error('Connection error:', error);
@@ -79,17 +96,12 @@ const Index = () => {
   const handleDisconnect = () => {
     firebaseService.cleanup();
     setIsConnected(false);
+    setMessages([]);
     toast({
       title: "Disconnected",
       description: "You've been disconnected from the chat.",
     });
   };
-
-  useEffect(() => {
-    return () => {
-      firebaseService.cleanup();
-    };
-  }, []);
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
@@ -158,8 +170,27 @@ const Index = () => {
           )
         ) : (
           <div className="w-full max-w-2xl space-y-4 animate-fadeIn">
-            <div className="glass rounded-lg p-8 min-h-[400px]">
-              {/* Chat messages will go here */}
+            <div className="glass rounded-lg p-8 min-h-[400px] overflow-y-auto flex flex-col space-y-4">
+              {messages.map((message) => (
+                <div
+                  key={message.id}
+                  className={`flex ${
+                    message.senderId === firebaseService.getCurrentUserId()
+                      ? "justify-end"
+                      : "justify-start"
+                  }`}
+                >
+                  <div
+                    className={`max-w-[70%] p-3 rounded-lg ${
+                      message.senderId === firebaseService.getCurrentUserId()
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted"
+                    }`}
+                  >
+                    {message.text}
+                  </div>
+                </div>
+              ))}
             </div>
             {communicationType === "chat" ? (
               <ChatInput />
@@ -176,7 +207,7 @@ const Index = () => {
               </div>
             )}
             <div className="flex justify-center">
-              <ChatControls />
+              <ChatControls onDisconnect={handleDisconnect} />
             </div>
           </div>
         )}
