@@ -83,7 +83,6 @@ class FirebaseService {
           timestamp: serverTimestamp()
         });
 
-        // Handle disconnection
         const connectedRef = ref(this.db, '.info/connected');
         onValue(connectedRef, (snap) => {
           if (snap.val() === false && this.userId) {
@@ -91,7 +90,6 @@ class FirebaseService {
           }
         });
 
-        // Monitor partner changes
         onValue(ref(this.db, `users/${this.userId}/partner`), (snapshot) => {
           const partnerId = snapshot.val();
           if (!partnerId) {
@@ -128,20 +126,30 @@ class FirebaseService {
     
     try {
       console.log('Finding partner...');
+      
+      await this.cleanup();
+      
       const availableUsersRef = ref(this.db, 'availableUsers');
       const snapshot = await get(availableUsersRef);
       
-      // Filter out users who already have partners and our own ID
+      const currentUserRef = ref(this.db, `users/${this.userId}/partner`);
+      const currentUserSnap = await get(currentUserRef);
+      
+      if (currentUserSnap.exists()) {
+        console.log('User already has a partner');
+        return currentUserSnap.val();
+      }
+
       const availableUsers: string[] = [];
       const userPromises: Promise<any>[] = [];
 
       snapshot.forEach((childSnapshot) => {
         const userId = childSnapshot.key;
         if (userId && userId !== this.userId) {
-          // Check if this user already has a partner
-          const userPromise = get(ref(this.db, `users/${userId}/partner`))
-            .then(partnerSnap => {
-              if (!partnerSnap.exists()) {
+          const userPromise = get(ref(this.db, `users/${userId}`))
+            .then(userSnap => {
+              const userData = userSnap.val();
+              if (!userData?.partner) {
                 availableUsers.push(userId);
               }
             });
@@ -149,11 +157,9 @@ class FirebaseService {
         }
       });
 
-      // Wait for all user checks to complete
       await Promise.all(userPromises);
 
       if (availableUsers.length > 0) {
-        // Randomly select a partner from available users
         const randomIndex = Math.floor(Math.random() * availableUsers.length);
         const randomPartner = availableUsers[randomIndex];
         console.log('Found potential partner:', randomPartner);
@@ -161,12 +167,13 @@ class FirebaseService {
         const chatRoomId = [this.userId, randomPartner].sort().join('_');
         this.currentChatRoom = chatRoomId;
 
-        // Atomic update to set partnership
         const updates: any = {};
         updates[`availableUsers/${this.userId}`] = null;
         updates[`availableUsers/${randomPartner}`] = null;
         updates[`users/${this.userId}/partner`] = randomPartner;
         updates[`users/${randomPartner}/partner`] = this.userId;
+        updates[`users/${this.userId}/chatRoom`] = chatRoomId;
+        updates[`users/${randomPartner}/chatRoom`] = chatRoomId;
         updates[`chats/${chatRoomId}`] = {
           created: serverTimestamp(),
           participants: {
@@ -179,34 +186,33 @@ class FirebaseService {
         console.log('Successfully paired with partner:', randomPartner);
         this.setupChatListener(randomPartner);
         return randomPartner;
-      } else {
-        console.log('No available partners, adding self to pool');
-        const userRef = ref(this.db, `availableUsers/${this.userId}`);
-        await set(userRef, {
-          timestamp: serverTimestamp(),
-          status: 'searching'
-        });
-
-        // Wait for partner assignment
-        return new Promise((resolve) => {
-          const partnerRef = ref(this.db, `users/${this.userId}/partner`);
-          const unsubscribe = onValue(partnerRef, (snapshot) => {
-            const partnerId = snapshot.val();
-            if (partnerId) {
-              console.log('Partner found:', partnerId);
-              off(partnerRef);
-              this.setupChatListener(partnerId);
-              resolve(partnerId);
-            }
-          });
-
-          // Cleanup listener after 30 seconds if no partner found
-          setTimeout(() => {
-            off(partnerRef);
-            resolve(null);
-          }, 30000);
-        });
       }
+
+      console.log('No available partners, adding self to pool');
+      await set(ref(this.db, `availableUsers/${this.userId}`), {
+        timestamp: serverTimestamp(),
+        status: 'searching'
+      });
+
+      return new Promise((resolve) => {
+        const partnerRef = ref(this.db, `users/${this.userId}`);
+        const unsubscribe = onValue(partnerRef, (snapshot) => {
+          const userData = snapshot.val();
+          if (userData?.partner) {
+            console.log('Partner found:', userData.partner);
+            this.currentChatRoom = userData.chatRoom;
+            off(partnerRef);
+            this.setupChatListener(userData.partner);
+            resolve(userData.partner);
+          }
+        });
+
+        setTimeout(() => {
+          off(partnerRef);
+          this.cleanup();
+          resolve(null);
+        }, 30000);
+      });
     } catch (error) {
       console.error('Error finding partner:', error);
       return null;
@@ -214,35 +220,30 @@ class FirebaseService {
   }
 
   async setupAudioCall(localStream: MediaStream) {
-    console.log('Setting up audio call with stream:', localStream.id);
-    this.localStream = localStream;
-    
     if (!this.currentChatRoom) {
       console.error('No chat room available for audio call');
       return;
     }
 
     try {
-      // Close any existing peer connection
+      console.log('Setting up audio call with stream:', localStream.id);
+      this.localStream = localStream;
+
       if (this.peerConnection) {
         this.peerConnection.close();
-        this.peerConnection = null;
       }
 
       const configuration = {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
-          { urls: 'stun:stun3.l.google.com:19302' },
-          { urls: 'stun:stun4.l.google.com:19302' },
+          { urls: 'turn:numb.viagenie.ca', username: 'webrtc@live.com', credential: 'muazkh' }
         ]
       };
 
       this.peerConnection = new RTCPeerConnection(configuration);
       const pc = this.peerConnection;
 
-      // Add local stream tracks to peer connection
       localStream.getTracks().forEach(track => {
         console.log('Adding track to peer connection:', track.kind);
         if (this.localStream) {
@@ -250,7 +251,6 @@ class FirebaseService {
         }
       });
 
-      // Handle incoming remote stream
       pc.ontrack = (event) => {
         console.log('Received remote track:', event.track.kind);
         [this.remoteStream] = event.streams;
@@ -266,27 +266,30 @@ class FirebaseService {
         });
       };
 
-      // Set up signaling
-      const signalingRef = ref(this.db, `chats/${this.currentChatRoom}/signaling`);
-      
-      // Handle and send ICE candidates
       pc.onicecandidate = (event) => {
         if (event.candidate) {
           console.log('New ICE candidate:', event.candidate.type);
-          push(ref(this.db, `chats/${this.currentChatRoom}/candidates`), {
+          push(ref(this.db, `chats/${this.currentChatRoom}/candidates/${this.userId}`), {
             ...event.candidate.toJSON(),
+            from: this.userId,
             processed: false
           });
         }
       };
 
-      // Listen for remote ICE candidates
+      pc.oniceconnectionstatechange = () => {
+        console.log('ICE connection state:', pc.iceConnectionState);
+      };
+
       onValue(ref(this.db, `chats/${this.currentChatRoom}/candidates`), (snapshot) => {
         snapshot.forEach((childSnapshot) => {
-          const candidate = childSnapshot.val();
-          if (candidate && !candidate.processed && pc.remoteDescription) {
-            console.log('Processing ICE candidate');
-            pc.addIceCandidate(new RTCIceCandidate(candidate))
+          const candidateData = childSnapshot.val();
+          if (candidateData && 
+              !candidateData.processed && 
+              candidateData.from !== this.userId && 
+              pc.remoteDescription) {
+            console.log('Processing remote ICE candidate');
+            pc.addIceCandidate(new RTCIceCandidate(candidateData))
               .then(() => {
                 update(childSnapshot.ref, { processed: true });
               })
@@ -295,37 +298,48 @@ class FirebaseService {
         });
       });
 
-      // Create and send offer
+      const signalingRef = ref(this.db, `chats/${this.currentChatRoom}/signaling`);
+
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      await set(signalingRef, { 
+      await set(signalingRef, {
         offer: {
           type: offer.type,
-          sdp: offer.sdp
+          sdp: offer.sdp,
+          from: this.userId
         }
       });
 
-      // Listen for answer
       onValue(signalingRef, async (snapshot) => {
         const data = snapshot.val();
         if (!data) return;
 
         try {
-          if (data.answer && !pc.currentRemoteDescription) {
+          if (data.answer && 
+              data.answer.from !== this.userId && 
+              !pc.currentRemoteDescription) {
             console.log('Setting remote description from answer');
-            const answerDescription = new RTCSessionDescription(data.answer);
-            await pc.setRemoteDescription(answerDescription);
+            await pc.setRemoteDescription(new RTCSessionDescription({
+              type: data.answer.type,
+              sdp: data.answer.sdp
+            }));
           }
 
-          if (data.offer && !pc.currentLocalDescription) {
+          if (data.offer && 
+              data.offer.from !== this.userId && 
+              !pc.currentLocalDescription) {
             console.log('Received offer, creating answer');
-            await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+            await pc.setRemoteDescription(new RTCSessionDescription({
+              type: data.offer.type,
+              sdp: data.offer.sdp
+            }));
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
-            await update(signalingRef, { 
+            await update(signalingRef, {
               answer: {
                 type: answer.type,
-                sdp: answer.sdp
+                sdp: answer.sdp,
+                from: this.userId
               }
             });
           }
@@ -391,12 +405,11 @@ class FirebaseService {
     this.messageCallback = callback;
   }
 
-  cleanup() {
+  async cleanup() {
     if (!this.initialized || !this.userId) return;
     
     console.log('Cleaning up Firebase connections...');
     try {
-      // Clean up WebRTC
       if (this.peerConnection) {
         this.peerConnection.close();
         this.peerConnection = null;
@@ -407,15 +420,9 @@ class FirebaseService {
         this.audioElement = null;
       }
 
-      // Clean up streams
       if (this.localStream) {
         this.localStream.getTracks().forEach(track => track.stop());
         this.localStream = null;
-      }
-
-      // Clean up Firebase references
-      if (this.availableUsersRef) {
-        remove(ref(this.db, `availableUsers/${this.userId}`));
       }
 
       const updates: any = {};
