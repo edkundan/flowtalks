@@ -1,4 +1,3 @@
-
 import { initializeApp } from 'firebase/app';
 import { getDatabase, ref, push, onValue, set, off, serverTimestamp, get, update, Database, DatabaseReference, remove } from 'firebase/database';
 import { getAuth, signInAnonymously } from 'firebase/auth';
@@ -132,24 +131,38 @@ class FirebaseService {
       const availableUsersRef = ref(this.db, 'availableUsers');
       const snapshot = await get(availableUsersRef);
       
-      // Filter out our own ID and users who already have partners
-      const availableUsers = [];
+      // Filter out users who already have partners and our own ID
+      const availableUsers: string[] = [];
+      const userPromises: Promise<any>[] = [];
+
       snapshot.forEach((childSnapshot) => {
         const userId = childSnapshot.key;
-        if (userId !== this.userId) {
-          availableUsers.push(userId);
+        if (userId && userId !== this.userId) {
+          // Check if this user already has a partner
+          const userPromise = get(ref(this.db, `users/${userId}/partner`))
+            .then(partnerSnap => {
+              if (!partnerSnap.exists()) {
+                availableUsers.push(userId);
+              }
+            });
+          userPromises.push(userPromise);
         }
       });
 
+      // Wait for all user checks to complete
+      await Promise.all(userPromises);
+
       if (availableUsers.length > 0) {
-        const randomPartner = availableUsers[0];
+        // Randomly select a partner from available users
+        const randomIndex = Math.floor(Math.random() * availableUsers.length);
+        const randomPartner = availableUsers[randomIndex];
         console.log('Found potential partner:', randomPartner);
 
-        const updates: any = {};
         const chatRoomId = [this.userId, randomPartner].sort().join('_');
         this.currentChatRoom = chatRoomId;
 
-        // Remove both users from available pool and set as partners
+        // Atomic update to set partnership
+        const updates: any = {};
         updates[`availableUsers/${this.userId}`] = null;
         updates[`availableUsers/${randomPartner}`] = null;
         updates[`users/${this.userId}/partner`] = randomPartner;
@@ -186,6 +199,12 @@ class FirebaseService {
               resolve(partnerId);
             }
           });
+
+          // Cleanup listener after 30 seconds if no partner found
+          setTimeout(() => {
+            off(partnerRef);
+            resolve(null);
+          }, 30000);
         });
       }
     } catch (error) {
@@ -203,89 +222,121 @@ class FirebaseService {
       return;
     }
 
-    const configuration = {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' },
-      ]
-    };
-
-    this.peerConnection = new RTCPeerConnection(configuration);
-    const pc = this.peerConnection;
-
-    // Add local stream
-    localStream.getTracks().forEach(track => {
-      if (this.localStream) {
-        pc.addTrack(track, this.localStream);
+    try {
+      // Close any existing peer connection
+      if (this.peerConnection) {
+        this.peerConnection.close();
+        this.peerConnection = null;
       }
-    });
 
-    // Handle remote stream
-    pc.ontrack = (event) => {
-      console.log('Received remote track:', event.track.kind);
-      [this.remoteStream] = event.streams;
-      this.audioElement = new Audio();
-      this.audioElement.srcObject = this.remoteStream;
-      this.audioElement.play().catch(console.error);
-    };
+      const configuration = {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+          { urls: 'stun:stun3.l.google.com:19302' },
+          { urls: 'stun:stun4.l.google.com:19302' },
+        ]
+      };
 
-    // Set up signaling
-    const signalingRef = ref(this.db, `chats/${this.currentChatRoom}/signaling`);
-    
-    // Handle ICE candidates
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        push(ref(this.db, `chats/${this.currentChatRoom}/candidates`), event.candidate.toJSON());
-      }
-    };
+      this.peerConnection = new RTCPeerConnection(configuration);
+      const pc = this.peerConnection;
 
-    // Listen for remote ICE candidates
-    onValue(ref(this.db, `chats/${this.currentChatRoom}/candidates`), (snapshot) => {
-      snapshot.forEach((childSnapshot) => {
-        const candidate = childSnapshot.val();
-        if (candidate && !candidate.processed) {
-          pc.addIceCandidate(new RTCIceCandidate(candidate))
-            .catch(console.error);
-          // Mark candidate as processed
-          update(childSnapshot.ref, { processed: true });
+      // Add local stream tracks to peer connection
+      localStream.getTracks().forEach(track => {
+        console.log('Adding track to peer connection:', track.kind);
+        if (this.localStream) {
+          pc.addTrack(track, this.localStream);
         }
       });
-    });
 
-    // Create and send offer
-    try {
+      // Handle incoming remote stream
+      pc.ontrack = (event) => {
+        console.log('Received remote track:', event.track.kind);
+        [this.remoteStream] = event.streams;
+        
+        if (this.audioElement) {
+          this.audioElement.srcObject = null;
+        }
+        
+        this.audioElement = new Audio();
+        this.audioElement.srcObject = this.remoteStream;
+        this.audioElement.play().catch(error => {
+          console.error('Error playing remote audio:', error);
+        });
+      };
+
+      // Set up signaling
+      const signalingRef = ref(this.db, `chats/${this.currentChatRoom}/signaling`);
+      
+      // Handle and send ICE candidates
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log('New ICE candidate:', event.candidate.type);
+          push(ref(this.db, `chats/${this.currentChatRoom}/candidates`), {
+            ...event.candidate.toJSON(),
+            processed: false
+          });
+        }
+      };
+
+      // Listen for remote ICE candidates
+      onValue(ref(this.db, `chats/${this.currentChatRoom}/candidates`), (snapshot) => {
+        snapshot.forEach((childSnapshot) => {
+          const candidate = childSnapshot.val();
+          if (candidate && !candidate.processed && pc.remoteDescription) {
+            console.log('Processing ICE candidate');
+            pc.addIceCandidate(new RTCIceCandidate(candidate))
+              .then(() => {
+                update(childSnapshot.ref, { processed: true });
+              })
+              .catch(console.error);
+          }
+        });
+      });
+
+      // Create and send offer
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      await set(signalingRef, { offer: offer });
+      await set(signalingRef, { 
+        offer: {
+          type: offer.type,
+          sdp: offer.sdp
+        }
+      });
+
+      // Listen for answer
+      onValue(signalingRef, async (snapshot) => {
+        const data = snapshot.val();
+        if (!data) return;
+
+        try {
+          if (data.answer && !pc.currentRemoteDescription) {
+            console.log('Setting remote description from answer');
+            const answerDescription = new RTCSessionDescription(data.answer);
+            await pc.setRemoteDescription(answerDescription);
+          }
+
+          if (data.offer && !pc.currentLocalDescription) {
+            console.log('Received offer, creating answer');
+            await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            await update(signalingRef, { 
+              answer: {
+                type: answer.type,
+                sdp: answer.sdp
+              }
+            });
+          }
+        } catch (error) {
+          console.error('Error in signaling:', error);
+        }
+      });
+
     } catch (error) {
-      console.error('Error creating offer:', error);
+      console.error('Error setting up audio call:', error);
     }
-
-    // Listen for answer
-    onValue(signalingRef, async (snapshot) => {
-      const data = snapshot.val();
-      if (!data) return;
-
-      try {
-        if (data.answer && !pc.currentRemoteDescription) {
-          console.log('Setting remote description');
-          await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-        }
-
-        if (data.offer && !pc.currentLocalDescription) {
-          console.log('Received offer, creating answer');
-          await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          await update(signalingRef, { answer: answer });
-        }
-      } catch (error) {
-        console.error('Error in signaling:', error);
-      }
-    });
   }
 
   private setupChatListener(partnerId: string) {
