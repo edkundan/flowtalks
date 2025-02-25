@@ -229,28 +229,50 @@ class FirebaseService {
       console.log('Setting up audio call with stream:', localStream.id);
       this.localStream = localStream;
 
+      // Cleanup existing connection
       if (this.peerConnection) {
         this.peerConnection.close();
       }
 
+      // Enhanced ICE server configuration
       const configuration = {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'turn:numb.viagenie.ca', username: 'webrtc@live.com', credential: 'muazkh' }
-        ]
+          {
+            urls: 'turn:numb.viagenie.ca',
+            username: 'webrtc@live.com',
+            credential: 'muazkh'
+          },
+          {
+            urls: 'turn:192.158.29.39:3478?transport=udp',
+            credential: 'JZEOEt2V3Qb0y27GRntt2u2PAYA=',
+            username: '28224511:1379330808'
+          }
+        ],
+        iceCandidatePoolSize: 10
       };
 
       this.peerConnection = new RTCPeerConnection(configuration);
       const pc = this.peerConnection;
 
-      localStream.getTracks().forEach(track => {
-        console.log('Adding track to peer connection:', track.kind);
+      // Set audio constraints
+      const audioConstraints = {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      };
+
+      // Add local stream tracks with constraints
+      localStream.getAudioTracks().forEach(track => {
+        track.applyConstraints(audioConstraints);
+        console.log('Adding audio track to peer connection:', track.id);
         if (this.localStream) {
           pc.addTrack(track, this.localStream);
         }
       });
 
+      // Handle remote stream with immediate audio playback
       pc.ontrack = (event) => {
         console.log('Received remote track:', event.track.kind);
         [this.remoteStream] = event.streams;
@@ -260,27 +282,57 @@ class FirebaseService {
         }
         
         this.audioElement = new Audio();
+        this.audioElement.autoplay = true;
+        this.audioElement.playsInline = true;
         this.audioElement.srcObject = this.remoteStream;
-        this.audioElement.play().catch(error => {
-          console.error('Error playing remote audio:', error);
-        });
+        
+        const playAudio = async () => {
+          try {
+            await this.audioElement.play();
+            console.log('Remote audio playing successfully');
+          } catch (error) {
+            console.error('Error playing remote audio:', error);
+            // Retry playback after user interaction
+            document.addEventListener('click', () => {
+              this.audioElement?.play().catch(console.error);
+            }, { once: true });
+          }
+        };
+        
+        playAudio();
       };
 
+      // Enhanced ICE candidate handling
       pc.onicecandidate = (event) => {
         if (event.candidate) {
           console.log('New ICE candidate:', event.candidate.type);
           push(ref(this.db, `chats/${this.currentChatRoom}/candidates/${this.userId}`), {
             ...event.candidate.toJSON(),
             from: this.userId,
-            processed: false
+            processed: false,
+            timestamp: serverTimestamp()
           });
         }
       };
 
+      // Monitor ICE connection state
       pc.oniceconnectionstatechange = () => {
         console.log('ICE connection state:', pc.iceConnectionState);
+        if (pc.iceConnectionState === 'failed') {
+          console.log('ICE connection failed, restarting...');
+          pc.restartIce();
+        }
       };
 
+      // Monitor connection state
+      pc.onconnectionstatechange = () => {
+        console.log('Connection state:', pc.connectionState);
+        if (pc.connectionState === 'failed') {
+          this.handleConnectionFailure();
+        }
+      };
+
+      // Listen for and process remote ICE candidates
       onValue(ref(this.db, `chats/${this.currentChatRoom}/candidates`), (snapshot) => {
         snapshot.forEach((childSnapshot) => {
           const candidateData = childSnapshot.val();
@@ -293,23 +345,33 @@ class FirebaseService {
               .then(() => {
                 update(childSnapshot.ref, { processed: true });
               })
-              .catch(console.error);
+              .catch(error => {
+                console.error('Error adding ICE candidate:', error);
+              });
           }
         });
       });
 
+      // Set up signaling
       const signalingRef = ref(this.db, `chats/${this.currentChatRoom}/signaling`);
 
-      const offer = await pc.createOffer();
+      // Create and send offer
+      const offer = await pc.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: false
+      });
+      
       await pc.setLocalDescription(offer);
       await set(signalingRef, {
         offer: {
           type: offer.type,
           sdp: offer.sdp,
-          from: this.userId
+          from: this.userId,
+          timestamp: serverTimestamp()
         }
       });
 
+      // Handle signaling
       onValue(signalingRef, async (snapshot) => {
         const data = snapshot.val();
         if (!data) return;
@@ -333,13 +395,16 @@ class FirebaseService {
               type: data.offer.type,
               sdp: data.offer.sdp
             }));
+            
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
+            
             await update(signalingRef, {
               answer: {
                 type: answer.type,
                 sdp: answer.sdp,
-                from: this.userId
+                from: this.userId,
+                timestamp: serverTimestamp()
               }
             });
           }
@@ -350,6 +415,24 @@ class FirebaseService {
 
     } catch (error) {
       console.error('Error setting up audio call:', error);
+    }
+  }
+
+  private handleConnectionFailure() {
+    console.log('Handling connection failure...');
+    if (this.peerConnection) {
+      this.peerConnection.close();
+      this.peerConnection = null;
+    }
+    
+    if (this.audioElement) {
+      this.audioElement.srcObject = null;
+      this.audioElement = null;
+    }
+    
+    if (this.localStream) {
+      this.localStream.getTracks().forEach(track => track.stop());
+      this.localStream = null;
     }
   }
 
