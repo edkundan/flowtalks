@@ -9,16 +9,19 @@ class WebRTCService {
 
   async startCall(): Promise<MediaStream | null> {
     try {
-      // Get user media with retries
-      this.localStream = await this.getUserMediaWithRetry();
-      if (!this.localStream) {
-        throw new Error('Could not get microphone access');
-      }
+      // First, get user media
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: false
+      });
 
-      // Create and configure peer connection
+      this.localStream = stream;
+      console.log('Got local stream:', stream.id);
+
+      // Create peer connection with simplified config
       this.peerConnection = new RTCPeerConnection({
         iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] },
           {
             urls: 'turn:numb.viagenie.ca',
             username: 'webrtc@live.com',
@@ -27,103 +30,80 @@ class WebRTCService {
         ]
       });
 
-      // Add local tracks
+      // Add all tracks from local stream
       this.localStream.getTracks().forEach(track => {
         if (this.peerConnection && this.localStream) {
+          console.log('Adding track to peer connection:', track.kind);
           this.peerConnection.addTrack(track, this.localStream);
         }
       });
 
-      // Set up remote stream handling
-      this.peerConnection.ontrack = ({ streams: [remoteStream] }) => {
-        console.log('Received remote stream');
+      // Handle incoming tracks
+      this.peerConnection.ontrack = (event) => {
+        console.log('Received remote track:', event.track.kind);
+        const [remoteStream] = event.streams;
         this.remoteStream = remoteStream;
-        this.playRemoteStream();
+
+        // Create new audio element
+        const audio = new Audio();
+        audio.autoplay = true;
+        audio.srcObject = remoteStream;
+
+        // Try to play immediately
+        audio.play().catch(error => {
+          console.error('Initial playback failed:', error);
+          // Retry on user interaction
+          document.body.addEventListener('click', () => {
+            audio.play().catch(console.error);
+          }, { once: true });
+        });
+
+        this.audioElement = audio;
+        console.log('Audio element created and stream attached');
+      };
+
+      // Log connection state changes
+      this.peerConnection.onconnectionstatechange = () => {
+        console.log('Connection state:', this.peerConnection?.connectionState);
+        if (this.peerConnection?.connectionState === 'connected') {
+          toast({
+            title: "Call Connected",
+            description: "Voice call is now active"
+          });
+        }
+      };
+
+      // Log ICE connection state changes
+      this.peerConnection.oniceconnectionstatechange = () => {
+        console.log('ICE connection state:', this.peerConnection?.iceConnectionState);
       };
 
       return this.localStream;
     } catch (error) {
-      console.error('Error starting call:', error);
+      console.error('Error in startCall:', error);
       toast({
         variant: "destructive",
-        title: "Call Error",
-        description: "Failed to start call. Please check your microphone settings."
+        title: "Microphone Error",
+        description: "Please allow microphone access to use voice calling."
       });
       return null;
     }
   }
 
-  private async getUserMediaWithRetry(retries = 3): Promise<MediaStream | null> {
-    for (let i = 0; i < retries; i++) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          },
-          video: false
-        });
-        return stream;
-      } catch (error) {
-        console.error(`Attempt ${i + 1} failed to get user media:`, error);
-        if (i === retries - 1) {
-          toast({
-            variant: "destructive",
-            title: "Microphone Error",
-            description: "Please allow microphone access to use voice calling."
-          });
-          return null;
-        }
-        // Wait before retrying
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-    }
-    return null;
-  }
-
-  private playRemoteStream() {
-    if (!this.remoteStream) return;
-
-    // Clean up existing audio element
-    if (this.audioElement) {
-      this.audioElement.srcObject = null;
-      this.audioElement.remove();
-    }
-
-    // Create and configure new audio element
-    this.audioElement = new Audio();
-    this.audioElement.autoplay = true;
-    this.audioElement.srcObject = this.remoteStream;
-    
-    // Play with retry mechanism
-    const playAudio = async () => {
-      try {
-        if (this.audioElement) {
-          await this.audioElement.play();
-          this.audioElement.volume = 1.0;
-          console.log('Remote audio playing successfully');
-        }
-      } catch (error) {
-        console.error('Error playing remote audio:', error);
-        // Retry on user interaction
-        document.addEventListener('click', () => {
-          this.audioElement?.play().catch(console.error);
-        }, { once: true });
-      }
-    };
-    
-    playAudio();
-  }
-
   async createOffer(): Promise<RTCSessionDescriptionInit | null> {
     try {
       if (!this.peerConnection) {
-        throw new Error('Peer connection not initialized');
+        throw new Error('No peer connection');
       }
 
-      const offer = await this.peerConnection.createOffer();
+      console.log('Creating offer...');
+      const offer = await this.peerConnection.createOffer({
+        offerToReceiveAudio: true
+      });
+
+      console.log('Setting local description...');
       await this.peerConnection.setLocalDescription(offer);
+      
       return offer;
     } catch (error) {
       console.error('Error creating offer:', error);
@@ -134,10 +114,12 @@ class WebRTCService {
   async handleAnswer(answer: RTCSessionDescriptionInit) {
     try {
       if (!this.peerConnection) {
-        throw new Error('Peer connection not initialized');
+        throw new Error('No peer connection');
       }
 
+      console.log('Setting remote description from answer...');
       await this.peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+      console.log('Remote description set successfully');
     } catch (error) {
       console.error('Error handling answer:', error);
     }
@@ -146,12 +128,18 @@ class WebRTCService {
   async handleOffer(offer: RTCSessionDescriptionInit): Promise<RTCSessionDescriptionInit | null> {
     try {
       if (!this.peerConnection) {
-        throw new Error('Peer connection not initialized');
+        throw new Error('No peer connection');
       }
 
+      console.log('Setting remote description from offer...');
       await this.peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+      
+      console.log('Creating answer...');
       const answer = await this.peerConnection.createAnswer();
+      
+      console.log('Setting local description...');
       await this.peerConnection.setLocalDescription(answer);
+      
       return answer;
     } catch (error) {
       console.error('Error handling offer:', error);
@@ -161,46 +149,51 @@ class WebRTCService {
 
   async addIceCandidate(candidate: RTCIceCandidateInit) {
     try {
-      if (this.peerConnection) {
-        await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-      }
+      if (!this.peerConnection) return;
+
+      console.log('Adding ICE candidate...');
+      await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+      console.log('ICE candidate added successfully');
     } catch (error) {
       console.error('Error adding ICE candidate:', error);
     }
   }
 
   onIceCandidate(callback: (candidate: RTCIceCandidate) => void) {
-    if (this.peerConnection) {
-      this.peerConnection.onicecandidate = (event) => {
-        if (event.candidate) {
-          callback(event.candidate);
-        }
-      };
-    }
+    if (!this.peerConnection) return;
+
+    this.peerConnection.onicecandidate = (event) => {
+      if (event.candidate) {
+        console.log('New ICE candidate:', event.candidate.type);
+        callback(event.candidate);
+      }
+    };
   }
 
   endCall() {
-    // Stop all tracks in local stream
+    console.log('Ending call...');
+
     if (this.localStream) {
-      this.localStream.getTracks().forEach(track => track.stop());
+      this.localStream.getTracks().forEach(track => {
+        console.log('Stopping track:', track.kind);
+        track.stop();
+      });
       this.localStream = null;
     }
 
-    // Clean up audio element
     if (this.audioElement) {
       this.audioElement.srcObject = null;
       this.audioElement.remove();
       this.audioElement = null;
     }
 
-    // Close peer connection
     if (this.peerConnection) {
       this.peerConnection.close();
       this.peerConnection = null;
     }
 
-    // Clear remote stream
     this.remoteStream = null;
+    console.log('Call ended and resources cleaned up');
   }
 }
 

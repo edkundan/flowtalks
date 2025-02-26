@@ -228,32 +228,43 @@ class FirebaseService {
     }
 
     try {
-      // Initialize WebRTC
+      console.log('Setting up audio call...');
+      
+      // Initialize WebRTC first
       await webRTCService.startCall();
 
       // Set up ICE candidate handling
       webRTCService.onIceCandidate((candidate) => {
-        push(ref(this.db, `chats/${this.currentChatRoom}/candidates/${this.userId}`), {
-          ...candidate.toJSON(),
-          from: this.userId,
-          timestamp: serverTimestamp()
-        });
+        if (this.currentChatRoom && this.userId) {
+          console.log('Sending ICE candidate to remote peer');
+          push(ref(this.db, `chats/${this.currentChatRoom}/candidates/${this.userId}`), {
+            candidate: candidate.toJSON(),
+            from: this.userId,
+            timestamp: serverTimestamp()
+          });
+        }
       });
 
       // Listen for remote ICE candidates
-      onValue(ref(this.db, `chats/${this.currentChatRoom}/candidates`), (snapshot) => {
+      const candidatesRef = ref(this.db, `chats/${this.currentChatRoom}/candidates`);
+      onValue(candidatesRef, (snapshot) => {
         snapshot.forEach((childSnapshot) => {
-          const candidateData = childSnapshot.val();
-          if (candidateData && candidateData.from !== this.userId) {
-            webRTCService.addIceCandidate(candidateData);
+          const data = childSnapshot.val();
+          if (data && data.from !== this.userId && data.candidate) {
+            console.log('Received ICE candidate from remote peer');
+            webRTCService.addIceCandidate(data.candidate);
           }
         });
       });
 
       // Create and send offer
+      console.log('Creating WebRTC offer...');
       const offer = await webRTCService.createOffer();
+      
       if (offer) {
-        await set(ref(this.db, `chats/${this.currentChatRoom}/signaling`), {
+        console.log('Sending offer to remote peer');
+        const signalingRef = ref(this.db, `chats/${this.currentChatRoom}/signaling`);
+        await set(signalingRef, {
           offer: {
             type: offer.type,
             sdp: offer.sdp,
@@ -264,26 +275,32 @@ class FirebaseService {
       }
 
       // Handle signaling
-      onValue(ref(this.db, `chats/${this.currentChatRoom}/signaling`), async (snapshot) => {
+      const signalingRef = ref(this.db, `chats/${this.currentChatRoom}/signaling`);
+      onValue(signalingRef, async (snapshot) => {
         const data = snapshot.val();
         if (!data) return;
 
         try {
+          // Handle incoming answer
           if (data.answer && data.answer.from !== this.userId) {
+            console.log('Received answer from remote peer');
             await webRTCService.handleAnswer({
               type: data.answer.type,
               sdp: data.answer.sdp
             });
           }
 
+          // Handle incoming offer
           if (data.offer && data.offer.from !== this.userId) {
+            console.log('Received offer from remote peer');
             const answer = await webRTCService.handleOffer({
               type: data.offer.type,
               sdp: data.offer.sdp
             });
 
             if (answer) {
-              await update(ref(this.db, `chats/${this.currentChatRoom}/signaling`), {
+              console.log('Sending answer to remote peer');
+              await update(signalingRef, {
                 answer: {
                   type: answer.type,
                   sdp: answer.sdp,
@@ -298,7 +315,7 @@ class FirebaseService {
           toast({
             variant: "destructive",
             title: "Call Error",
-            description: "Failed to establish call connection. Please try again."
+            description: "Connection failed. Please try again."
           });
         }
       });
@@ -308,14 +325,14 @@ class FirebaseService {
       toast({
         variant: "destructive",
         title: "Call Error",
-        description: "Failed to set up call. Please check your connection."
+        description: "Failed to set up call. Please try again."
       });
     }
   }
 
   async handleDisconnect() {
     try {
-      // End WebRTC call
+      // End WebRTC call first
       webRTCService.endCall();
 
       // Clean up Firebase connections
