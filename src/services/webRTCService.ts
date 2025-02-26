@@ -9,28 +9,40 @@ class WebRTCService {
 
   async startCall(): Promise<MediaStream | null> {
     try {
-      // First, get user media
+      // First ensure any previous call is cleaned up
+      this.endCall();
+
+      // Get user media with optimal audio settings
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+          sampleRate: 48000
+        },
         video: false
       });
 
       this.localStream = stream;
       console.log('Got local stream:', stream.id);
 
-      // Create peer connection with simplified config
+      // Create peer connection with optimal config
       this.peerConnection = new RTCPeerConnection({
         iceServers: [
-          { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] },
-          {
-            urls: 'turn:numb.viagenie.ca',
-            username: 'webrtc@live.com',
-            credential: 'muazkh'
+          { 
+            urls: [
+              'stun:stun1.l.google.com:19302',
+              'stun:stun2.l.google.com:19302'
+            ]
           }
-        ]
+        ],
+        iceCandidatePoolSize: 10,
+        bundlePolicy: 'max-bundle',
+        rtcpMuxPolicy: 'require'
       });
 
-      // Add all tracks from local stream
+      // Add local stream tracks
       this.localStream.getTracks().forEach(track => {
         if (this.peerConnection && this.localStream) {
           console.log('Adding track to peer connection:', track.kind);
@@ -38,44 +50,98 @@ class WebRTCService {
         }
       });
 
-      // Handle incoming tracks
+      // Handle incoming tracks with immediate playback
       this.peerConnection.ontrack = (event) => {
         console.log('Received remote track:', event.track.kind);
-        const [remoteStream] = event.streams;
-        this.remoteStream = remoteStream;
+        [this.remoteStream] = event.streams;
 
-        // Create new audio element
-        const audio = new Audio();
-        audio.autoplay = true;
-        audio.srcObject = remoteStream;
+        // Remove any existing audio element
+        if (this.audioElement) {
+          this.audioElement.srcObject = null;
+          this.audioElement.remove();
+        }
 
-        // Try to play immediately
-        audio.play().catch(error => {
-          console.error('Initial playback failed:', error);
-          // Retry on user interaction
-          document.body.addEventListener('click', () => {
-            audio.play().catch(console.error);
-          }, { once: true });
-        });
+        // Create and configure new audio element
+        this.audioElement = new Audio();
+        this.audioElement.autoplay = true;
+        this.audioElement.volume = 1.0;
+        
+        // Set audio element properties for better performance
+        this.audioElement.setAttribute('playsinline', 'true');
+        this.audioElement.muted = false;
 
-        this.audioElement = audio;
-        console.log('Audio element created and stream attached');
+        // Attach remote stream
+        this.audioElement.srcObject = this.remoteStream;
+
+        // Force play with retry mechanism
+        const playAudio = async () => {
+          try {
+            if (this.audioElement) {
+              await this.audioElement.play();
+              console.log('Audio playing successfully');
+              
+              // Ensure volume is at maximum
+              this.audioElement.volume = 1.0;
+            }
+          } catch (error) {
+            console.error('Error playing audio:', error);
+            
+            // Retry on next user interaction
+            const retryPlay = () => {
+              if (this.audioElement) {
+                this.audioElement.play()
+                  .then(() => {
+                    console.log('Audio playing after retry');
+                    document.body.removeEventListener('click', retryPlay);
+                  })
+                  .catch(console.error);
+              }
+            };
+
+            document.body.addEventListener('click', retryPlay, { once: true });
+            
+            toast({
+              description: "Click anywhere to enable audio playback",
+              duration: 5000,
+            });
+          }
+        };
+
+        playAudio();
       };
 
-      // Log connection state changes
+      // Enhanced connection state monitoring
       this.peerConnection.onconnectionstatechange = () => {
-        console.log('Connection state:', this.peerConnection?.connectionState);
-        if (this.peerConnection?.connectionState === 'connected') {
-          toast({
-            title: "Call Connected",
-            description: "Voice call is now active"
-          });
+        const state = this.peerConnection?.connectionState;
+        console.log('Connection state changed:', state);
+        
+        switch (state) {
+          case 'connected':
+            toast({
+              title: "Call Connected",
+              description: "Voice call is now active"
+            });
+            break;
+          case 'failed':
+            toast({
+              variant: "destructive",
+              title: "Connection Failed",
+              description: "Trying to reconnect..."
+            });
+            // Attempt to restart ICE
+            this.peerConnection?.restartIce();
+            break;
         }
       };
 
-      // Log ICE connection state changes
+      // Monitor ICE connection state
       this.peerConnection.oniceconnectionstatechange = () => {
         console.log('ICE connection state:', this.peerConnection?.iceConnectionState);
+        
+        if (this.peerConnection?.iceConnectionState === 'failed') {
+          // If ICE fails, attempt to restart it
+          this.peerConnection.restartIce();
+        }
       };
 
       return this.localStream;
@@ -171,8 +237,9 @@ class WebRTCService {
   }
 
   endCall() {
-    console.log('Ending call...');
+    console.log('Ending call and cleaning up resources...');
 
+    // Stop all tracks in local stream
     if (this.localStream) {
       this.localStream.getTracks().forEach(track => {
         console.log('Stopping track:', track.kind);
@@ -181,19 +248,22 @@ class WebRTCService {
       this.localStream = null;
     }
 
+    // Clean up audio element
     if (this.audioElement) {
+      this.audioElement.pause();
       this.audioElement.srcObject = null;
       this.audioElement.remove();
       this.audioElement = null;
     }
 
+    // Close peer connection
     if (this.peerConnection) {
       this.peerConnection.close();
       this.peerConnection = null;
     }
 
     this.remoteStream = null;
-    console.log('Call ended and resources cleaned up');
+    console.log('Call ended and all resources cleaned up');
   }
 }
 
