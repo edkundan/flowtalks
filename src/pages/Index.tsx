@@ -54,13 +54,13 @@ const Index = () => {
           });
           console.log('Audio permissions granted');
           localStreamRef.current = stream;
-          await firebaseService.setupAudioCall(stream);
+          await firebaseService.setupAudioCall();
         } catch (error) {
           console.error('Audio permission error:', error);
           toast({
             variant: "destructive",
             title: "Microphone Access Required",
-            description: "Please allow microphone access for audio calls.",
+            description: "Please allow microphone access to use voice calling.",
           });
           setIsConnecting(false);
           return;
@@ -109,8 +109,6 @@ const Index = () => {
       description: "You've been disconnected from the chat.",
     });
   };
-
-  // ... keep existing code (JSX for the component)
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
