@@ -1,6 +1,8 @@
 import { initializeApp } from 'firebase/app';
 import { getDatabase, ref, push, onValue, set, off, serverTimestamp, get, update, Database, DatabaseReference, remove } from 'firebase/database';
 import { getAuth, signInAnonymously } from 'firebase/auth';
+import { webRTCService } from './webRTCService';
+import { toast } from '@/components/ui/use-toast';
 
 const firebaseConfig = {
   apiKey: "AIzaSyDEo2b9ALsMDOZOAg_1R0VMjdB_QnRh2kk",
@@ -220,229 +222,101 @@ class FirebaseService {
   }
 
   async setupAudioCall(localStream: MediaStream) {
-    if (!this.currentChatRoom) {
-      console.error('No chat room available for audio call');
+    if (!this.currentChatRoom || !this.userId) {
+      console.error('No chat room or user ID available');
       return;
     }
 
     try {
-      console.log('Setting up audio call with stream:', localStream.id);
-      this.localStream = localStream;
+      // Initialize WebRTC
+      await webRTCService.startCall();
 
-      // Cleanup existing connection
-      if (this.peerConnection) {
-        this.peerConnection.close();
-      }
-
-      // Enhanced ICE server configuration for better connectivity
-      const configuration = {
-        iceServers: [
-          { 
-            urls: [
-              'stun:stun1.l.google.com:19302',
-              'stun:stun2.l.google.com:19302',
-              'stun:stun3.l.google.com:19302',
-              'stun:stun4.l.google.com:19302'
-            ]
-          },
-          {
-            urls: 'turn:numb.viagenie.ca',
-            username: 'webrtc@live.com',
-            credential: 'muazkh'
-          }
-        ],
-        iceCandidatePoolSize: 10
-      };
-
-      this.peerConnection = new RTCPeerConnection(configuration);
-      const pc = this.peerConnection;
-
-      // Optimize audio settings
-      const audioConstraints = {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        sampleRate: 48000,
-        channelCount: 1
-      };
-
-      // Add local stream tracks with optimized constraints
-      localStream.getAudioTracks().forEach(track => {
-        track.applyConstraints(audioConstraints);
-        console.log('Adding audio track to peer connection:', track.id);
-        if (this.localStream) {
-          pc.addTrack(track, this.localStream);
-        }
+      // Set up ICE candidate handling
+      webRTCService.onIceCandidate((candidate) => {
+        push(ref(this.db, `chats/${this.currentChatRoom}/candidates/${this.userId}`), {
+          ...candidate.toJSON(),
+          from: this.userId,
+          timestamp: serverTimestamp()
+        });
       });
 
-      // Create and set up audio element for remote stream
-      const createAudioElement = () => {
-        const audio = new Audio();
-        audio.autoplay = true;
-        // Remove playsInline as it's not a valid property for HTMLAudioElement
-        return audio;
-      };
-
-      // Handle remote stream with robust audio playback
-      pc.ontrack = (event) => {
-        console.log('Received remote track:', event.track.kind);
-        [this.remoteStream] = event.streams;
-        
-        // Clean up existing audio element
-        if (this.audioElement) {
-          this.audioElement.srcObject = null;
-          this.audioElement.remove();
-        }
-        
-        // Create and configure new audio element
-        this.audioElement = createAudioElement();
-        this.audioElement.srcObject = this.remoteStream;
-        
-        // Attempt to play audio with retry mechanism
-        const playAudio = async () => {
-          try {
-            if (this.audioElement) {
-              await this.audioElement.play();
-              console.log('Remote audio playing successfully');
-              // Set volume to maximum
-              this.audioElement.volume = 1.0;
-            }
-          } catch (error) {
-            console.error('Error playing remote audio:', error);
-            // Retry playback after user interaction
-            document.addEventListener('click', () => {
-              this.audioElement?.play().catch(console.error);
-            }, { once: true });
-          }
-        };
-        
-        playAudio();
-      };
-
-      // Enhanced ICE candidate handling
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          console.log('New ICE candidate:', event.candidate.type);
-          push(ref(this.db, `chats/${this.currentChatRoom}/candidates/${this.userId}`), {
-            ...event.candidate.toJSON(),
-            from: this.userId,
-            processed: false,
-            timestamp: serverTimestamp()
-          });
-        }
-      };
-
-      pc.oniceconnectionstatechange = () => {
-        console.log('ICE connection state:', pc.iceConnectionState);
-        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
-          pc.restartIce();
-        }
-      };
-
-      pc.onconnectionstatechange = () => {
-        console.log('Connection state:', pc.connectionState);
-        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-          this.handleConnectionFailure();
-        }
-      };
-
-      // Listen for and process remote ICE candidates
+      // Listen for remote ICE candidates
       onValue(ref(this.db, `chats/${this.currentChatRoom}/candidates`), (snapshot) => {
         snapshot.forEach((childSnapshot) => {
           const candidateData = childSnapshot.val();
-          if (candidateData && 
-              !candidateData.processed && 
-              candidateData.from !== this.userId && 
-              pc.remoteDescription) {
-            pc.addIceCandidate(new RTCIceCandidate(candidateData))
-              .then(() => {
-                update(childSnapshot.ref, { processed: true });
-              })
-              .catch(console.error);
+          if (candidateData && candidateData.from !== this.userId) {
+            webRTCService.addIceCandidate(candidateData);
           }
         });
       });
 
-      // Set up signaling
-      const signalingRef = ref(this.db, `chats/${this.currentChatRoom}/signaling`);
-
-      // Create and send offer with audio preferences
-      const offer = await pc.createOffer({
-        offerToReceiveAudio: true,
-        offerToReceiveVideo: false
-      });
-      
-      await pc.setLocalDescription(offer);
-      await set(signalingRef, {
-        offer: {
-          type: offer.type,
-          sdp: offer.sdp,
-          from: this.userId,
-          timestamp: serverTimestamp()
-        }
-      });
+      // Create and send offer
+      const offer = await webRTCService.createOffer();
+      if (offer) {
+        await set(ref(this.db, `chats/${this.currentChatRoom}/signaling`), {
+          offer: {
+            type: offer.type,
+            sdp: offer.sdp,
+            from: this.userId,
+            timestamp: serverTimestamp()
+          }
+        });
+      }
 
       // Handle signaling
-      onValue(signalingRef, async (snapshot) => {
+      onValue(ref(this.db, `chats/${this.currentChatRoom}/signaling`), async (snapshot) => {
         const data = snapshot.val();
         if (!data) return;
 
         try {
-          if (data.answer && 
-              data.answer.from !== this.userId && 
-              !pc.currentRemoteDescription) {
-            await pc.setRemoteDescription(new RTCSessionDescription({
+          if (data.answer && data.answer.from !== this.userId) {
+            await webRTCService.handleAnswer({
               type: data.answer.type,
               sdp: data.answer.sdp
-            }));
+            });
           }
 
-          if (data.offer && 
-              data.offer.from !== this.userId && 
-              !pc.currentLocalDescription) {
-            await pc.setRemoteDescription(new RTCSessionDescription({
+          if (data.offer && data.offer.from !== this.userId) {
+            const answer = await webRTCService.handleOffer({
               type: data.offer.type,
               sdp: data.offer.sdp
-            }));
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            await update(signalingRef, {
-              answer: {
-                type: answer.type,
-                sdp: answer.sdp,
-                from: this.userId,
-                timestamp: serverTimestamp()
-              }
             });
+
+            if (answer) {
+              await update(ref(this.db, `chats/${this.currentChatRoom}/signaling`), {
+                answer: {
+                  type: answer.type,
+                  sdp: answer.sdp,
+                  from: this.userId,
+                  timestamp: serverTimestamp()
+                }
+              });
+            }
           }
         } catch (error) {
           console.error('Error in signaling:', error);
+          toast({
+            variant: "destructive",
+            title: "Call Error",
+            description: "Failed to establish call connection. Please try again."
+          });
         }
       });
 
     } catch (error) {
       console.error('Error setting up audio call:', error);
+      toast({
+        variant: "destructive",
+        title: "Call Error",
+        description: "Failed to set up call. Please check your connection."
+      });
     }
   }
 
   async handleDisconnect() {
     try {
-      // Clean up current connection
-      if (this.peerConnection) {
-        this.peerConnection.close();
-        this.peerConnection = null;
-      }
-      
-      if (this.audioElement) {
-        this.audioElement.srcObject = null;
-        this.audioElement.remove();
-        this.audioElement = null;
-      }
-      
-      if (this.localStream) {
-        this.localStream.getTracks().forEach(track => track.stop());
-        this.localStream = null;
-      }
+      // End WebRTC call
+      webRTCService.endCall();
 
       // Clean up Firebase connections
       await this.cleanup();
