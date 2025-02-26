@@ -222,65 +222,93 @@ class FirebaseService {
   }
 
   async setupAudioCall() {
-    if (!this.currentChatRoom || !this.userId) return;
+    if (!this.currentChatRoom || !this.userId) {
+      console.error('No chat room or user ID available');
+      return;
+    }
+
+    console.log('Setting up audio call in room:', this.currentChatRoom);
 
     try {
-      // Start WebRTC
-      await webRTCService.startCall();
+      // Initialize WebRTC
+      const localStream = await webRTCService.startCall();
+      if (!localStream) {
+        throw new Error('Failed to get local stream');
+      }
 
-      // Handle ICE candidates
+      // Set up ICE candidate handling
       webRTCService.onIceCandidate((candidate) => {
-        push(ref(this.db, `chats/${this.currentChatRoom}/candidates/${this.userId}`), {
+        console.log('Sending ICE candidate');
+        const candidatesRef = ref(this.db, `chats/${this.currentChatRoom}/candidates/${this.userId}`);
+        push(candidatesRef, {
           candidate: candidate.toJSON(),
+          timestamp: serverTimestamp(),
           from: this.userId
         });
       });
 
-      // Listen for remote ICE candidates
-      onValue(ref(this.db, `chats/${this.currentChatRoom}/candidates`), (snapshot) => {
-        snapshot.forEach((child) => {
-          const data = child.val();
-          if (data && data.from !== this.userId) {
+      // Listen for ICE candidates from the other peer
+      const candidatesRef = ref(this.db, `chats/${this.currentChatRoom}/candidates`);
+      onValue(candidatesRef, (snapshot) => {
+        snapshot.forEach((childSnapshot) => {
+          const data = childSnapshot.val();
+          if (data && data.from !== this.userId && data.candidate) {
+            console.log('Received ICE candidate from peer');
             webRTCService.addIceCandidate(data.candidate);
           }
         });
       });
 
       // Create and send offer
+      console.log('Creating WebRTC offer');
       const offer = await webRTCService.createOffer();
       if (offer) {
-        await set(ref(this.db, `chats/${this.currentChatRoom}/signaling`), {
-          offer: { ...offer, from: this.userId }
+        const signalingRef = ref(this.db, `chats/${this.currentChatRoom}/signaling`);
+        await set(signalingRef, {
+          offer: {
+            ...offer,
+            from: this.userId,
+            timestamp: serverTimestamp()
+          }
         });
+        console.log('Offer sent to signaling server');
       }
 
-      // Handle signaling
-      onValue(ref(this.db, `chats/${this.currentChatRoom}/signaling`), async (snapshot) => {
+      // Listen for signaling messages
+      const signalingRef = ref(this.db, `chats/${this.currentChatRoom}/signaling`);
+      onValue(signalingRef, async (snapshot) => {
         const data = snapshot.val();
         if (!data) return;
 
-        // Handle answer
+        // Handle answer if we're the caller
         if (data.answer && data.answer.from !== this.userId) {
+          console.log('Received answer from peer');
           await webRTCService.handleAnswer(data.answer);
         }
 
-        // Handle offer
+        // Handle offer if we're the callee
         if (data.offer && data.offer.from !== this.userId) {
+          console.log('Received offer from peer');
           const answer = await webRTCService.handleOffer(data.offer);
           if (answer) {
-            await update(ref(this.db, `chats/${this.currentChatRoom}/signaling`), {
-              answer: { ...answer, from: this.userId }
+            await update(signalingRef, {
+              answer: {
+                ...answer,
+                from: this.userId,
+                timestamp: serverTimestamp()
+              }
             });
+            console.log('Answer sent to signaling server');
           }
         }
       });
 
     } catch (error) {
-      console.error('Call setup error:', error);
+      console.error('Error in setupAudioCall:', error);
       toast({
         variant: "destructive",
-        title: "Call Error",
-        description: "Failed to setup call"
+        title: "Call Setup Failed",
+        description: "Unable to establish voice connection"
       });
     }
   }
