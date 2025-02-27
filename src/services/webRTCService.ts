@@ -6,6 +6,7 @@ class WebRTCService {
   private localStream: MediaStream | null = null;
   private remoteAudioElement: HTMLAudioElement | null = null;
   private isMuted: boolean = false;
+  private signalingState: string = "new"; // Track our own signaling state
 
   async startCall(): Promise<MediaStream | null> {
     try {
@@ -13,6 +14,9 @@ class WebRTCService {
       
       // Clean up any existing connections
       this.endCall();
+
+      // Reset signaling state
+      this.signalingState = "new";
 
       // Get microphone access
       this.localStream = await navigator.mediaDevices.getUserMedia({
@@ -94,6 +98,16 @@ class WebRTCService {
         }
       };
 
+      // Log signaling state changes
+      this.peerConnection.onsignalingstatechange = () => {
+        const state = this.peerConnection?.signalingState;
+        console.log('WebRTC signaling state changed:', state);
+        // Update our internal state tracking
+        if (this.peerConnection) {
+          this.signalingState = this.peerConnection.signalingState;
+        }
+      };
+
       // Log connection state changes
       this.peerConnection.onconnectionstatechange = () => {
         const state = this.peerConnection?.connectionState;
@@ -162,16 +176,25 @@ class WebRTCService {
     }
 
     try {
-      console.log('Creating offer...');
-      const offer = await this.peerConnection.createOffer({
-        offerToReceiveAudio: true,
-        offerToReceiveVideo: false
-      });
-      
-      await this.peerConnection.setLocalDescription(offer);
-      console.log('Local description set');
-      
-      return offer;
+      // Only create an offer if we're in the right state
+      if (this.signalingState !== "have-local-offer" && 
+          this.signalingState !== "have-remote-offer") {
+        
+        console.log('Creating offer...');
+        const offer = await this.peerConnection.createOffer({
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: false
+        });
+        
+        await this.peerConnection.setLocalDescription(offer);
+        this.signalingState = "have-local-offer";
+        console.log('Local description set, state:', this.peerConnection.signalingState);
+        
+        return offer;
+      } else {
+        console.log('Not creating offer, already have one. State:', this.signalingState);
+        return null;
+      }
     } catch (error) {
       console.error('Error creating offer:', error);
       return null;
@@ -185,14 +208,24 @@ class WebRTCService {
     }
 
     try {
-      console.log('Handling incoming offer...');
-      await this.peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-      
-      console.log('Creating answer...');
-      const answer = await this.peerConnection.createAnswer();
-      await this.peerConnection.setLocalDescription(answer);
-      
-      return answer;
+      // Make sure we're in the right state to handle an offer
+      if (this.peerConnection.signalingState === "stable" || 
+          this.peerConnection.signalingState === "have-local-pranswer") {
+          
+        console.log('Handling incoming offer...');
+        await this.peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+        this.signalingState = "have-remote-offer";
+        
+        console.log('Creating answer...');
+        const answer = await this.peerConnection.createAnswer();
+        await this.peerConnection.setLocalDescription(answer);
+        this.signalingState = "stable"; // After setting local answer
+        
+        return answer;
+      } else {
+        console.error('Cannot handle offer in current state:', this.peerConnection.signalingState);
+        return null;
+      }
     } catch (error) {
       console.error('Error handling offer:', error);
       return null;
@@ -206,9 +239,17 @@ class WebRTCService {
     }
 
     try {
-      console.log('Setting remote description from answer...');
-      await this.peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-      console.log('Remote description set successfully');
+      console.log('Current signaling state before setting answer:', this.peerConnection.signalingState);
+      
+      // Only set remote description if we're in the right state
+      if (this.peerConnection.signalingState === "have-local-offer") {
+        console.log('Setting remote description from answer...');
+        await this.peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        this.signalingState = "stable";
+        console.log('Remote description set successfully, state:', this.peerConnection.signalingState);
+      } else {
+        console.error('Cannot set remote answer in state:', this.peerConnection.signalingState);
+      }
     } catch (error) {
       console.error('Error setting remote description:', error);
     }
@@ -266,6 +307,9 @@ class WebRTCService {
       this.peerConnection = null;
       console.log('Closed peer connection');
     }
+    
+    // Reset signaling state
+    this.signalingState = "new";
   }
 }
 

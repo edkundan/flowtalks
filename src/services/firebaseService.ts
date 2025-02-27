@@ -1,3 +1,4 @@
+
 import { initializeApp } from 'firebase/app';
 import { getDatabase, ref, push, onValue, set, off, serverTimestamp, get, update, Database, DatabaseReference, remove } from 'firebase/database';
 import { getAuth, signInAnonymously } from 'firebase/auth';
@@ -31,6 +32,7 @@ class FirebaseService {
   private userCountCallback: ((count: number) => void) | null = null;
   private audioElement: HTMLAudioElement | null = null;
   private isInCall: boolean = false;
+  private isInitiator: boolean = false;
 
   constructor() {
     try {
@@ -182,6 +184,10 @@ class FirebaseService {
         };
 
         await update(ref(this.db), updates);
+        
+        // We're the initiator since we found the partner first
+        this.isInitiator = true;
+        
         console.log('Successfully paired with partner:', randomPartner);
         this.setupChatListener(randomPartner);
         return randomPartner;
@@ -192,6 +198,9 @@ class FirebaseService {
         timestamp: serverTimestamp(),
         status: 'searching'
       });
+
+      // We're not the initiator since we're waiting for a partner
+      this.isInitiator = false;
 
       return new Promise((resolve) => {
         const partnerRef = ref(this.db, `users/${this.userId}`);
@@ -236,6 +245,10 @@ class FirebaseService {
         throw new Error('Failed to get local stream');
       }
 
+      // Clear any existing signaling data to prevent conflicts
+      const signalingRef = ref(this.db, `chats/${this.currentChatRoom}/signaling`);
+      await set(signalingRef, null);
+
       // Set up ICE candidate handling
       webRTCService.onIceCandidate((candidate) => {
         console.log('Sending ICE candidate');
@@ -251,37 +264,40 @@ class FirebaseService {
       const candidatesRef = ref(this.db, `chats/${this.currentChatRoom}/candidates`);
       onValue(candidatesRef, (snapshot) => {
         snapshot.forEach((childSnapshot) => {
-          const candidatesData = childSnapshot.val();
-          if (!candidatesData) return;
-          
-          // Check through all child objects for candidates
-          Object.keys(candidatesData).forEach(key => {
-            const data = candidatesData[key];
-            if (data && data.from !== this.userId && data.candidate) {
-              console.log('Received ICE candidate from peer');
-              webRTCService.addIceCandidate(data.candidate);
-            }
-          });
+          const userId = childSnapshot.key;
+          if (userId !== this.userId) {
+            childSnapshot.forEach((candidateSnapshot) => {
+              const data = candidateSnapshot.val();
+              if (data && data.candidate) {
+                console.log('Received ICE candidate from peer');
+                webRTCService.addIceCandidate(data.candidate);
+              }
+            });
+          }
         });
       });
 
-      // Create and send offer
-      console.log('Creating WebRTC offer');
-      const offer = await webRTCService.createOffer();
-      if (offer) {
-        const signalingRef = ref(this.db, `chats/${this.currentChatRoom}/signaling`);
-        await set(signalingRef, {
-          offer: {
-            ...offer,
-            from: this.userId,
-            timestamp: serverTimestamp()
-          }
-        });
-        console.log('Offer sent to signaling server');
+      // Wait a moment to make sure both peers are ready
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Only the initiator creates an offer
+      if (this.isInitiator) {
+        console.log('We are the initiator, creating WebRTC offer');
+        const offer = await webRTCService.createOffer();
+        if (offer) {
+          await set(signalingRef, {
+            offer: {
+              type: offer.type,
+              sdp: offer.sdp,
+              from: this.userId,
+              timestamp: serverTimestamp()
+            }
+          });
+          console.log('Offer sent to signaling server');
+        }
       }
 
       // Listen for signaling messages
-      const signalingRef = ref(this.db, `chats/${this.currentChatRoom}/signaling`);
       onValue(signalingRef, async (snapshot) => {
         const data = snapshot.val();
         if (!data) return;
@@ -294,12 +310,13 @@ class FirebaseService {
 
         // Handle offer if we're the callee
         if (data.offer && data.offer.from !== this.userId) {
-          console.log('Received offer from peer');
+          console.log('Received offer from peer, creating answer');
           const answer = await webRTCService.handleOffer(data.offer);
           if (answer) {
             await update(signalingRef, {
               answer: {
-                ...answer,
+                type: answer.type,
+                sdp: answer.sdp,
                 from: this.userId,
                 timestamp: serverTimestamp()
               }
@@ -318,28 +335,6 @@ class FirebaseService {
         description: "Unable to establish voice connection"
       });
     }
-  }
-
-  async handleDisconnect() {
-    try {
-      // End WebRTC call first
-      webRTCService.endCall();
-      this.isInCall = false;
-
-      // Clean up Firebase connections
-      await this.cleanup(true);
-
-      // Automatically find new partner
-      console.log('Finding new partner after disconnect...');
-      return this.findPartner();
-    } catch (error) {
-      console.error('Error during disconnect handling:', error);
-    }
-  }
-
-  private handleConnectionFailure() {
-    console.log('Handling connection failure...');
-    this.handleDisconnect();
   }
 
   private setupChatListener(partnerId: string) {
@@ -407,14 +402,23 @@ class FirebaseService {
       const updates: any = {};
       
       if (fullCleanup) {
+        const userPartnerRef = ref(this.db, `users/${this.userId}/partner`);
+        const partnerSnap = await get(userPartnerRef);
+        
+        if (partnerSnap.exists()) {
+          const partnerId = partnerSnap.val();
+          updates[`users/${partnerId}/partner`] = null;
+        }
+        
         updates[`users/${this.userId}/status`] = 'offline';
         updates[`users/${this.userId}/lastSeen`] = serverTimestamp();
         updates[`users/${this.userId}/partner`] = null;
         updates[`onlineUsers/${this.userId}`] = null;
+        updates[`availableUsers/${this.userId}`] = null;
       }
 
       if (Object.keys(updates).length > 0) {
-        update(ref(this.db), updates);
+        await update(ref(this.db), updates);
       }
       
       if (fullCleanup) {
@@ -424,9 +428,8 @@ class FirebaseService {
         }
 
         if (this.currentChatRoom) {
-          // Keep the room for WebRTC signaling if we're in a call and this
-          // is not a full cleanup
-          if (!this.isInCall) {
+          if (fullCleanup) {
+            // Clean up listening for WebRTC signaling
             off(ref(this.db, `chats/${this.currentChatRoom}/messages`));
             off(ref(this.db, `chats/${this.currentChatRoom}/signaling`));
             off(ref(this.db, `chats/${this.currentChatRoom}/candidates`));
