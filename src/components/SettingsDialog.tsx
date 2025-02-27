@@ -12,7 +12,7 @@ import {
 import { Badge } from "./ui/badge";
 import { X } from "lucide-react";
 import { Button } from "./ui/button";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 export const SettingsDialog = ({
   open,
@@ -24,16 +24,59 @@ export const SettingsDialog = ({
   const [interests, setInterests] = useState<string[]>([]);
   const [newInterest, setNewInterest] = useState("");
   const [college, setCollege] = useState("");
+  const [genderPreference, setGenderPreference] = useState("any");
+  const [savedSettings, setSavedSettings] = useState(false);
+
+  // Load saved settings when component mounts
+  useEffect(() => {
+    if (open) {
+      const savedInterests = localStorage.getItem('userInterests');
+      const savedCollege = localStorage.getItem('userCollege');
+      const savedGenderPref = localStorage.getItem('genderPreference');
+      
+      if (savedInterests) setInterests(JSON.parse(savedInterests));
+      if (savedCollege) setCollege(savedCollege);
+      if (savedGenderPref) setGenderPreference(savedGenderPref);
+    }
+  }, [open]);
 
   const addInterest = () => {
     if (newInterest && !interests.includes(newInterest)) {
-      setInterests([...interests, newInterest]);
+      const updatedInterests = [...interests, newInterest];
+      setInterests(updatedInterests);
+      localStorage.setItem('userInterests', JSON.stringify(updatedInterests));
       setNewInterest("");
     }
   };
 
   const removeInterest = (interest: string) => {
-    setInterests(interests.filter((i) => i !== interest));
+    const updatedInterests = interests.filter((i) => i !== interest);
+    setInterests(updatedInterests);
+    localStorage.setItem('userInterests', JSON.stringify(updatedInterests));
+  };
+
+  const handleCollegeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setCollege(e.target.value);
+    localStorage.setItem('userCollege', e.target.value);
+  };
+
+  const handleGenderPreferenceChange = (value: string) => {
+    setGenderPreference(value);
+    localStorage.setItem('genderPreference', value);
+  };
+
+  const saveSettings = () => {
+    localStorage.setItem('userInterests', JSON.stringify(interests));
+    localStorage.setItem('userCollege', college);
+    localStorage.setItem('genderPreference', genderPreference);
+    
+    setSavedSettings(true);
+    toast({
+      title: "Settings Saved",
+      description: "Your preferences have been updated successfully."
+    });
+    
+    setTimeout(() => setSavedSettings(false), 2000);
   };
 
   return (
@@ -48,7 +91,7 @@ export const SettingsDialog = ({
             <Input 
               placeholder="Enter your college name" 
               value={college} 
-              onChange={(e) => setCollege(e.target.value)}
+              onChange={handleCollegeChange}
             />
           </div>
           <div className="space-y-2">
@@ -84,20 +127,11 @@ export const SettingsDialog = ({
             </div>
           </div>
           <div className="space-y-2">
-            <Label>College Preference</Label>
-            <Select>
-              <SelectTrigger>
-                <SelectValue placeholder="Select college preference" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="same">Same College Only</SelectItem>
-                <SelectItem value="any">Any College</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
             <Label>Gender Preference</Label>
-            <Select>
+            <Select 
+              value={genderPreference} 
+              onValueChange={handleGenderPreferenceChange}
+            >
               <SelectTrigger>
                 <SelectValue placeholder="Select gender preference" />
               </SelectTrigger>
@@ -108,8 +142,15 @@ export const SettingsDialog = ({
               </SelectContent>
             </Select>
           </div>
+          <Button 
+            onClick={saveSettings} 
+            className="mt-4"
+            disabled={savedSettings}
+          >
+            {savedSettings ? "✓ Saved" : "Save Settings"}
+          </Button>
         </div>
       </DialogContent>
     </Dialog>
   );
-};
+}

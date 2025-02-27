@@ -40,8 +40,38 @@ const Index = () => {
       setMessages(newMessages);
     });
 
+    // Set up the partner disconnect callback
+    firebaseService.setPartnerDisconnectCallback(() => {
+      setIsConnected(false);
+      setMessages([]);
+    });
+
+    // Check for blocked users
+    const checkForBlockedUsers = () => {
+      const blockedUsers = JSON.parse(localStorage.getItem('blockedUsers') || '{}');
+      const now = Date.now();
+      
+      // Clean up expired blocks
+      let hasChanges = false;
+      for (const userId in blockedUsers) {
+        if (blockedUsers[userId] < now) {
+          delete blockedUsers[userId];
+          hasChanges = true;
+        }
+      }
+      
+      if (hasChanges) {
+        localStorage.setItem('blockedUsers', JSON.stringify(blockedUsers));
+      }
+    };
+    
+    checkForBlockedUsers();
+    const intervalId = setInterval(checkForBlockedUsers, 60000); // Check every minute
+
     return () => {
       firebaseService.cleanup();
+      firebaseService.setPartnerDisconnectCallback(null);
+      clearInterval(intervalId);
     };
   }, []);
 
@@ -110,6 +140,18 @@ const Index = () => {
           title: "Searching...",
           description: "Looking for available partners.",
         });
+        
+        // If we timeout after waiting, reset the state
+        setTimeout(() => {
+          if (isConnecting) {
+            setIsConnecting(false);
+            toast({
+              variant: "destructive",
+              title: "No partners found",
+              description: "Couldn't find any available partners right now. Please try again.",
+            });
+          }
+        }, 30000);
       }
     } catch (error) {
       console.error('Connection error:', error);

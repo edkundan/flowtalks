@@ -33,6 +33,8 @@ class FirebaseService {
   private audioElement: HTMLAudioElement | null = null;
   private isInCall: boolean = false;
   private isInitiator: boolean = false;
+  private currentPartnerId: string | null = null;
+  private partnerDisconnectCallback: (() => void) | null = null;
 
   constructor() {
     try {
@@ -58,12 +60,20 @@ class FirebaseService {
     });
   }
 
-  setUserCountCallback(callback: (count: number) => void) {
+  setUserCountCallback(callback: ((count: number) => void) | null) {
     this.userCountCallback = callback;
+  }
+
+  setPartnerDisconnectCallback(callback: (() => void) | null) {
+    this.partnerDisconnectCallback = callback;
   }
 
   getCurrentUserId() {
     return this.userId;
+  }
+
+  getCurrentPartnerId() {
+    return this.currentPartnerId;
   }
 
   private async initializeAuth() {
@@ -97,7 +107,7 @@ class FirebaseService {
 
         onValue(ref(this.db, `users/${this.userId}/partner`), (snapshot) => {
           const partnerId = snapshot.val();
-          if (!partnerId && this.isInCall) {
+          if (!partnerId && this.currentPartnerId) {
             this.handlePartnerDisconnect();
           }
         });
@@ -109,14 +119,50 @@ class FirebaseService {
   }
 
   private handlePartnerDisconnect() {
-    console.log('Partner disconnected, cleaning up audio resources');
-    webRTCService.endCall();
-    this.isInCall = false;
+    console.log('Partner disconnected, cleaning up resources');
+    
+    // Clean up WebRTC if in a call
+    if (this.isInCall) {
+      webRTCService.endCall();
+      this.isInCall = false;
+    }
+    
+    this.currentPartnerId = null;
+    
+    // Show disconnection notification
     toast({
       variant: "destructive",
-      title: "Call Ended",
-      description: "Your partner has disconnected"
+      title: "User Disconnected",
+      description: "Your partner has ended the conversation"
     });
+    
+    // Trigger the disconnect callback if provided
+    if (this.partnerDisconnectCallback) {
+      this.partnerDisconnectCallback();
+    }
+  }
+
+  isUserBlocked(userId: string): boolean {
+    const blockedUsers = JSON.parse(localStorage.getItem('blockedUsers') || '{}');
+    const expiryTime = blockedUsers[userId];
+    
+    if (expiryTime) {
+      // Check if the block has expired
+      if (Date.now() < expiryTime) {
+        return true;
+      } else {
+        // Remove expired block
+        delete blockedUsers[userId];
+        localStorage.setItem('blockedUsers', JSON.stringify(blockedUsers));
+      }
+    }
+    
+    return false;
+  }
+
+  getBlockExpiry(userId: string): number {
+    const blockedUsers = JSON.parse(localStorage.getItem('blockedUsers') || '{}');
+    return blockedUsers[userId] || 0;
   }
 
   async findPartner(): Promise<string | null> {
@@ -138,19 +184,52 @@ class FirebaseService {
       
       if (currentUserSnap.exists()) {
         console.log('User already has a partner');
-        return currentUserSnap.val();
+        const partnerId = currentUserSnap.val();
+        
+        // Check if this partner is blocked
+        if (this.isUserBlocked(partnerId)) {
+          const expiry = this.getBlockExpiry(partnerId);
+          const hoursLeft = Math.ceil((expiry - Date.now()) / (60 * 60 * 1000));
+          
+          toast({
+            variant: "destructive",
+            title: "User Blocked",
+            description: `This user has been blocked. The block will expire in ${hoursLeft} hours.`
+          });
+          
+          // Clean up this connection
+          await this.cleanup(true);
+          return null;
+        }
+        
+        this.currentPartnerId = partnerId;
+        return partnerId;
       }
 
+      // Get user preferences
+      const userCollege = localStorage.getItem('userCollege') || '';
+      const userGenderPref = localStorage.getItem('genderPreference') || 'any';
+      
       const availableUsers: string[] = [];
       const userPromises: Promise<any>[] = [];
 
       snapshot.forEach((childSnapshot) => {
         const userId = childSnapshot.key;
-        if (userId && userId !== this.userId) {
+        if (userId && userId !== this.userId && !this.isUserBlocked(userId)) {
           const userPromise = get(ref(this.db, `users/${userId}`))
             .then(userSnap => {
               const userData = userSnap.val();
               if (!userData?.partner) {
+                // If college preference is enabled and doesn't match, skip
+                if (userCollege && userData?.college && userCollege !== userData.college) {
+                  return;
+                }
+                
+                // If gender preference is set and doesn't match, skip
+                if (userGenderPref !== 'any' && userData?.gender && userGenderPref !== userData.gender) {
+                  return;
+                }
+                
                 availableUsers.push(userId);
               }
             });
@@ -167,6 +246,10 @@ class FirebaseService {
 
         const chatRoomId = [this.userId, randomPartner].sort().join('_');
         this.currentChatRoom = chatRoomId;
+        this.currentPartnerId = randomPartner;
+        
+        // Store the current partner ID for reporting feature
+        localStorage.setItem('currentPartnerId', randomPartner);
 
         const updates: any = {};
         updates[`availableUsers/${this.userId}`] = null;
@@ -175,6 +258,12 @@ class FirebaseService {
         updates[`users/${randomPartner}/partner`] = this.userId;
         updates[`users/${this.userId}/chatRoom`] = chatRoomId;
         updates[`users/${randomPartner}/chatRoom`] = chatRoomId;
+        
+        // Add college information if available
+        if (userCollege) {
+          updates[`users/${this.userId}/college`] = userCollege;
+        }
+        
         updates[`chats/${chatRoomId}`] = {
           created: serverTimestamp(),
           participants: {
@@ -194,21 +283,53 @@ class FirebaseService {
       }
 
       console.log('No available partners, adding self to pool');
-      await set(ref(this.db, `availableUsers/${this.userId}`), {
+      const userData: any = {
         timestamp: serverTimestamp(),
         status: 'searching'
-      });
+      };
+      
+      // Add college info if available
+      if (userCollege) {
+        userData.college = userCollege;
+      }
+      
+      await set(ref(this.db, `availableUsers/${this.userId}`), userData);
 
       // We're not the initiator since we're waiting for a partner
       this.isInitiator = false;
 
       return new Promise((resolve) => {
         const partnerRef = ref(this.db, `users/${this.userId}`);
-        const unsubscribe = onValue(partnerRef, (snapshot) => {
+        const unsubscribe = onValue(partnerRef, async (snapshot) => {
           const userData = snapshot.val();
           if (userData?.partner) {
             console.log('Partner found:', userData.partner);
+            
+            // Check if this partner is blocked
+            if (this.isUserBlocked(userData.partner)) {
+              const expiry = this.getBlockExpiry(userData.partner);
+              const hoursLeft = Math.ceil((expiry - Date.now()) / (60 * 60 * 1000));
+              
+              toast({
+                variant: "destructive",
+                title: "User Blocked",
+                description: `This user has been blocked. The block will expire in ${hoursLeft} hours.`
+              });
+              
+              // Reject this partner and clean up
+              const updates: any = {};
+              updates[`users/${this.userId}/partner`] = null;
+              updates[`users/${userData.partner}/partner`] = null;
+              await update(ref(this.db), updates);
+              return;
+            }
+            
             this.currentChatRoom = userData.chatRoom;
+            this.currentPartnerId = userData.partner;
+            
+            // Store the current partner ID for reporting feature
+            localStorage.setItem('currentPartnerId', userData.partner);
+            
             off(partnerRef);
             this.setupChatListener(userData.partner);
             resolve(userData.partner);
@@ -415,6 +536,10 @@ class FirebaseService {
         updates[`users/${this.userId}/partner`] = null;
         updates[`onlineUsers/${this.userId}`] = null;
         updates[`availableUsers/${this.userId}`] = null;
+        
+        // Clear the current partner ID
+        this.currentPartnerId = null;
+        localStorage.removeItem('currentPartnerId');
       }
 
       if (Object.keys(updates).length > 0) {
