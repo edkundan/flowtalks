@@ -15,6 +15,7 @@ import { firebaseService } from "@/services/firebaseService";
 import { useToast } from "@/components/ui/use-toast";
 import { OnlineUsers } from "@/components/online-users";
 import { CallButton3D } from "@/components/CallButton3D";
+import { webRTCService } from "@/services/webRTCService";
 
 interface Message {
   id: string;
@@ -48,38 +49,61 @@ const Index = () => {
     setIsConnecting(true);
     
     try {
-      if (communicationType === "audio") {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ 
-            audio: true,
-            video: false 
-          });
-          console.log('Audio permissions granted');
-          localStreamRef.current = stream;
-          await firebaseService.setupAudioCall();
-        } catch (error) {
-          console.error('Audio permission error:', error);
-          toast({
-            variant: "destructive",
-            title: "Microphone Access Required",
-            description: "Please allow microphone access to use voice calling.",
-          });
-          setIsConnecting(false);
-          return;
-        }
-      }
-
       console.log('Initiating connection...');
       const partnerId = await firebaseService.findPartner();
       
       if (partnerId) {
         console.log('Partner found, connecting...', partnerId);
-        setIsConnecting(false);
-        setIsConnected(true);
-        toast({
-          title: "Connected!",
-          description: `Ready for ${communicationType === "chat" ? "chat" : "call"}`,
-        });
+        
+        // If it's an audio call, we need to set up the WebRTC connection after we found a partner
+        if (communicationType === "audio") {
+          try {
+            console.log('Setting up audio call...');
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+              },
+              video: false 
+            });
+            console.log('Audio permissions granted, tracks:', stream.getTracks().length);
+            localStreamRef.current = stream;
+            
+            // Initialize the audio call with our partner
+            await firebaseService.setupAudioCall();
+            console.log('Audio call setup complete');
+            
+            // Give WebRTC a moment to establish the connection
+            setTimeout(() => {
+              setIsConnecting(false);
+              setIsConnected(true);
+              toast({
+                title: "Connected!",
+                description: "Voice call established. You can now talk to your partner.",
+              });
+            }, 1000);
+          } catch (error) {
+            console.error('Audio setup error:', error);
+            toast({
+              variant: "destructive",
+              title: "Microphone Access Required",
+              description: "Please allow microphone access to use voice calling.",
+            });
+            setIsConnecting(false);
+            // Clean up the connection since audio failed
+            firebaseService.cleanup(true);
+            return;
+          }
+        } else {
+          // For text chat, we can connect immediately
+          setIsConnecting(false);
+          setIsConnected(true);
+          toast({
+            title: "Connected!",
+            description: "Chat established. You can now chat with your partner.",
+          });
+        }
       } else {
         console.log('No partner found, waiting...');
         toast({
@@ -99,11 +123,20 @@ const Index = () => {
   };
 
   const handleDisconnect = () => {
+    console.log('Disconnecting...');
     if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => track.stop());
+      localStreamRef.current.getTracks().forEach(track => {
+        console.log('Stopping local track:', track.kind);
+        track.stop();
+      });
       localStreamRef.current = null;
     }
-    firebaseService.cleanup();
+    
+    if (communicationType === "audio") {
+      webRTCService.endCall();
+    }
+    
+    firebaseService.cleanup(true);
     setIsConnected(false);
     setMessages([]);
     toast({
@@ -181,26 +214,32 @@ const Index = () => {
           <div className="w-full max-w-2xl space-y-4 animate-fadeIn">
             <div className="glass rounded-lg p-8 min-h-[400px] overflow-y-auto flex flex-col space-y-4">
               {communicationType === "chat" ? (
-                messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`flex ${
-                      message.senderId === firebaseService.getCurrentUserId()
-                        ? "justify-end"
-                        : "justify-start"
-                    }`}
-                  >
+                messages.length > 0 ? (
+                  messages.map((message) => (
                     <div
-                      className={`max-w-[70%] p-3 rounded-lg ${
+                      key={message.id}
+                      className={`flex ${
                         message.senderId === firebaseService.getCurrentUserId()
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-muted"
+                          ? "justify-end"
+                          : "justify-start"
                       }`}
                     >
-                      {message.text}
+                      <div
+                        className={`max-w-[70%] p-3 rounded-lg ${
+                          message.senderId === firebaseService.getCurrentUserId()
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-muted"
+                        }`}
+                      >
+                        {message.text}
+                      </div>
                     </div>
+                  ))
+                ) : (
+                  <div className="flex-1 flex items-center justify-center">
+                    <p className="text-muted-foreground">Send a message to start the conversation!</p>
                   </div>
-                ))
+                )
               ) : (
                 <div className="flex-1 flex items-center justify-center">
                   <CallButton3D onEndCall={handleDisconnect} />
