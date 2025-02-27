@@ -1,3 +1,4 @@
+
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -44,6 +45,25 @@ io.on('connection', (socket) => {
         text: message,
         from: socket.id
       });
+    }
+  });
+
+  // Handle WebRTC signaling
+  socket.on('webrtc-offer', (data) => {
+    if (socket.partner) {
+      io.to(socket.partner).emit('webrtc-offer', data);
+    }
+  });
+
+  socket.on('webrtc-answer', (data) => {
+    if (socket.partner) {
+      io.to(socket.partner).emit('webrtc-answer', data);
+    }
+  });
+
+  socket.on('webrtc-ice-candidate', (data) => {
+    if (socket.partner) {
+      io.to(socket.partner).emit('webrtc-ice-candidate', data);
     }
   });
 

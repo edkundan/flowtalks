@@ -2,6 +2,7 @@
 import { Phone, MicOff, Mic } from "lucide-react";
 import { useState, useEffect } from "react";
 import { Button } from "./ui/button";
+import { webRTCService } from "@/services/webRTCService";
 
 interface CallButtonProps {
   onEndCall: () => void;
@@ -20,9 +21,8 @@ export function CallButton3D({ onEndCall }: CallButtonProps) {
   }, []);
 
   const toggleMute = () => {
-    setIsMuted(!isMuted);
-    // Here you would add actual mute functionality
-    // This would interact with webRTCService
+    const newMuteState = webRTCService.toggleMute();
+    setIsMuted(!!newMuteState);
   };
 
   return (

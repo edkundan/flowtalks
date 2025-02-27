@@ -30,6 +30,7 @@ class FirebaseService {
   private remoteStream: MediaStream | null = null;
   private userCountCallback: ((count: number) => void) | null = null;
   private audioElement: HTMLAudioElement | null = null;
+  private isInCall: boolean = false;
 
   constructor() {
     try {
@@ -88,13 +89,13 @@ class FirebaseService {
         const connectedRef = ref(this.db, '.info/connected');
         onValue(connectedRef, (snap) => {
           if (snap.val() === false && this.userId) {
-            this.cleanup();
+            this.cleanup(true);
           }
         });
 
         onValue(ref(this.db, `users/${this.userId}/partner`), (snapshot) => {
           const partnerId = snapshot.val();
-          if (!partnerId) {
+          if (!partnerId && this.isInCall) {
             this.handlePartnerDisconnect();
           }
         });
@@ -106,18 +107,14 @@ class FirebaseService {
   }
 
   private handlePartnerDisconnect() {
-    if (this.peerConnection) {
-      this.peerConnection.close();
-      this.peerConnection = null;
-    }
-    if (this.audioElement) {
-      this.audioElement.srcObject = null;
-      this.audioElement = null;
-    }
-    if (this.localStream) {
-      this.localStream.getTracks().forEach(track => track.stop());
-      this.localStream = null;
-    }
+    console.log('Partner disconnected, cleaning up audio resources');
+    webRTCService.endCall();
+    this.isInCall = false;
+    toast({
+      variant: "destructive",
+      title: "Call Ended",
+      description: "Your partner has disconnected"
+    });
   }
 
   async findPartner(): Promise<string | null> {
@@ -129,7 +126,7 @@ class FirebaseService {
     try {
       console.log('Finding partner...');
       
-      await this.cleanup();
+      await this.cleanup(false);
       
       const availableUsersRef = ref(this.db, 'availableUsers');
       const snapshot = await get(availableUsersRef);
@@ -211,7 +208,7 @@ class FirebaseService {
 
         setTimeout(() => {
           off(partnerRef);
-          this.cleanup();
+          this.cleanup(true);
           resolve(null);
         }, 30000);
       });
@@ -230,6 +227,9 @@ class FirebaseService {
     console.log('Setting up audio call in room:', this.currentChatRoom);
 
     try {
+      // Mark that we're in a call
+      this.isInCall = true;
+
       // Initialize WebRTC
       const localStream = await webRTCService.startCall();
       if (!localStream) {
@@ -251,11 +251,17 @@ class FirebaseService {
       const candidatesRef = ref(this.db, `chats/${this.currentChatRoom}/candidates`);
       onValue(candidatesRef, (snapshot) => {
         snapshot.forEach((childSnapshot) => {
-          const data = childSnapshot.val();
-          if (data && data.from !== this.userId && data.candidate) {
-            console.log('Received ICE candidate from peer');
-            webRTCService.addIceCandidate(data.candidate);
-          }
+          const candidatesData = childSnapshot.val();
+          if (!candidatesData) return;
+          
+          // Check through all child objects for candidates
+          Object.keys(candidatesData).forEach(key => {
+            const data = candidatesData[key];
+            if (data && data.from !== this.userId && data.candidate) {
+              console.log('Received ICE candidate from peer');
+              webRTCService.addIceCandidate(data.candidate);
+            }
+          });
         });
       });
 
@@ -305,6 +311,7 @@ class FirebaseService {
 
     } catch (error) {
       console.error('Error in setupAudioCall:', error);
+      this.isInCall = false;
       toast({
         variant: "destructive",
         title: "Call Setup Failed",
@@ -317,9 +324,10 @@ class FirebaseService {
     try {
       // End WebRTC call first
       webRTCService.endCall();
+      this.isInCall = false;
 
       // Clean up Firebase connections
-      await this.cleanup();
+      await this.cleanup(true);
 
       // Automatically find new partner
       console.log('Finding new partner after disconnect...');
@@ -386,44 +394,45 @@ class FirebaseService {
     this.messageCallback = callback;
   }
 
-  async cleanup() {
+  async cleanup(fullCleanup: boolean = true) {
     if (!this.initialized || !this.userId) return;
     
     console.log('Cleaning up Firebase connections...');
     try {
-      if (this.peerConnection) {
-        this.peerConnection.close();
-        this.peerConnection = null;
-      }
-      
-      if (this.audioElement) {
-        this.audioElement.srcObject = null;
-        this.audioElement = null;
-      }
-
-      if (this.localStream) {
-        this.localStream.getTracks().forEach(track => track.stop());
-        this.localStream = null;
+      if (fullCleanup && this.isInCall) {
+        webRTCService.endCall();
+        this.isInCall = false;
       }
 
       const updates: any = {};
-      updates[`users/${this.userId}/status`] = 'offline';
-      updates[`users/${this.userId}/lastSeen`] = serverTimestamp();
-      updates[`users/${this.userId}/partner`] = null;
-      updates[`onlineUsers/${this.userId}`] = null;
-
-      update(ref(this.db), updates);
       
-      if (this.partnerRef) {
-        off(this.partnerRef);
-        this.partnerRef = null;
+      if (fullCleanup) {
+        updates[`users/${this.userId}/status`] = 'offline';
+        updates[`users/${this.userId}/lastSeen`] = serverTimestamp();
+        updates[`users/${this.userId}/partner`] = null;
+        updates[`onlineUsers/${this.userId}`] = null;
       }
 
-      if (this.currentChatRoom) {
-        off(ref(this.db, `chats/${this.currentChatRoom}/messages`));
-        off(ref(this.db, `chats/${this.currentChatRoom}/signaling`));
-        off(ref(this.db, `chats/${this.currentChatRoom}/candidates`));
-        this.currentChatRoom = null;
+      if (Object.keys(updates).length > 0) {
+        update(ref(this.db), updates);
+      }
+      
+      if (fullCleanup) {
+        if (this.partnerRef) {
+          off(this.partnerRef);
+          this.partnerRef = null;
+        }
+
+        if (this.currentChatRoom) {
+          // Keep the room for WebRTC signaling if we're in a call and this
+          // is not a full cleanup
+          if (!this.isInCall) {
+            off(ref(this.db, `chats/${this.currentChatRoom}/messages`));
+            off(ref(this.db, `chats/${this.currentChatRoom}/signaling`));
+            off(ref(this.db, `chats/${this.currentChatRoom}/candidates`));
+            this.currentChatRoom = null;
+          }
+        }
       }
       
       console.log('Cleanup completed successfully');
