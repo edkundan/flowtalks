@@ -1,4 +1,5 @@
-import { History, Info, Mail, Monitor, Settings } from "lucide-react";
+
+import { History, Info, Mail, Settings } from "lucide-react";
 import { Button } from "./ui/button";
 import { ThemeToggle } from "./theme-toggle";
 import { Link, useNavigate } from "react-router-dom";
@@ -17,7 +18,7 @@ export const Header = () => {
   return (
     <header className="flex items-center justify-between p-4 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <Link to="/" className="text-xl font-semibold text-primary">
-        RandomChat
+        FlowTalks
       </Link>
       
       <div className="flex items-center gap-6">
@@ -37,10 +38,6 @@ export const Header = () => {
           >
             <Mail className="h-4 w-4" />
             <span className="text-xs">Contact Us</span>
-          </Button>
-          <Button variant="ghost" className="flex flex-col items-center gap-1">
-            <Monitor className="h-4 w-4" />
-            <span className="text-xs">Live Users</span>
           </Button>
           <Button variant="ghost" className="flex flex-col items-center gap-1">
             <History className="h-4 w-4" />
@@ -78,10 +75,6 @@ export const Header = () => {
             <DropdownMenuItem onClick={() => navigate('/contact')}>
               <Mail className="h-4 w-4 mr-2" />
               Contact Us
-            </DropdownMenuItem>
-            <DropdownMenuItem>
-              <Monitor className="h-4 w-4 mr-2" />
-              Live Users
             </DropdownMenuItem>
             <DropdownMenuItem>
               <History className="h-4 w-4 mr-2" />

@@ -5,6 +5,7 @@ class WebRTCService {
   private peerConnection: RTCPeerConnection | null = null;
   private localStream: MediaStream | null = null;
   private remoteAudioElement: HTMLAudioElement | null = null;
+  private isMuted: boolean = false;
 
   async startCall(): Promise<MediaStream | null> {
     try {
@@ -15,16 +16,26 @@ class WebRTCService {
 
       // Get microphone access
       this.localStream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        },
         video: false
       });
-      console.log('Got local stream');
+      console.log('Got local stream with tracks:', this.localStream.getTracks().map(t => t.kind).join(', '));
 
       // Create and configure peer connection
       this.peerConnection = new RTCPeerConnection({
         iceServers: [
-          { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }
-        ]
+          { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] },
+          {
+            urls: ['turn:numb.viagenie.ca'],
+            username: 'webrtc@live.com',
+            credential: 'muazkh'
+          }
+        ],
+        iceCandidatePoolSize: 10
       });
 
       // Add all local audio tracks to the connection
@@ -43,22 +54,48 @@ class WebRTCService {
         if (!this.remoteAudioElement) {
           this.remoteAudioElement = new Audio();
           this.remoteAudioElement.autoplay = true;
+          this.remoteAudioElement.volume = 1.0;
           document.body.appendChild(this.remoteAudioElement);
+          console.log('Created new audio element');
         }
 
         // Set the remote stream
         const [remoteStream] = event.streams;
-        this.remoteAudioElement.srcObject = remoteStream;
-        
-        // Attempt to play audio
-        this.remoteAudioElement.play()
-          .then(() => console.log('Remote audio playing'))
-          .catch(err => console.error('Error playing remote audio:', err));
+        if (this.remoteAudioElement.srcObject !== remoteStream) {
+          this.remoteAudioElement.srcObject = remoteStream;
+          console.log('Set remote stream to audio element');
+          
+          // Play audio with user interaction already happened
+          this.remoteAudioElement.play()
+            .then(() => console.log('Remote audio playing successfully'))
+            .catch(err => {
+              console.error('Error playing remote audio:', err);
+              toast({
+                variant: "destructive",
+                title: "Audio Error",
+                description: "Could not play the remote audio. Try refreshing the page."
+              });
+            });
+        }
       };
 
       // Log connection state changes
       this.peerConnection.onconnectionstatechange = () => {
-        console.log('Connection state:', this.peerConnection?.connectionState);
+        const state = this.peerConnection?.connectionState;
+        console.log('Connection state changed:', state);
+        
+        if (state === 'connected') {
+          toast({
+            title: "Call Connected",
+            description: "You can now talk to your partner"
+          });
+        } else if (state === 'failed' || state === 'disconnected' || state === 'closed') {
+          toast({
+            variant: "destructive",
+            title: "Call Disconnected",
+            description: "The connection was lost"
+          });
+        }
       };
 
       // Log ICE connection state changes
@@ -81,6 +118,22 @@ class WebRTCService {
       });
       return null;
     }
+  }
+
+  toggleMute() {
+    if (!this.localStream) return;
+    
+    this.isMuted = !this.isMuted;
+    this.localStream.getAudioTracks().forEach(track => {
+      track.enabled = !this.isMuted;
+    });
+    
+    toast({
+      title: this.isMuted ? "Microphone Muted" : "Microphone Unmuted",
+      description: this.isMuted ? "Your partner cannot hear you" : "Your partner can hear you now"
+    });
+    
+    return this.isMuted;
   }
 
   async createOffer(): Promise<RTCSessionDescriptionInit | null> {

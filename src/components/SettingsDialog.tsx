@@ -1,3 +1,4 @@
+
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Label } from "./ui/label";
 import { Input } from "./ui/input";
@@ -22,6 +23,7 @@ export const SettingsDialog = ({
 }) => {
   const [interests, setInterests] = useState<string[]>([]);
   const [newInterest, setNewInterest] = useState("");
+  const [college, setCollege] = useState("");
 
   const addInterest = () => {
     if (newInterest && !interests.includes(newInterest)) {
@@ -41,6 +43,14 @@ export const SettingsDialog = ({
           <DialogTitle>Settings</DialogTitle>
         </DialogHeader>
         <div className="grid gap-4 py-4">
+          <div className="space-y-2">
+            <Label>College</Label>
+            <Input 
+              placeholder="Enter your college name" 
+              value={college} 
+              onChange={(e) => setCollege(e.target.value)}
+            />
+          </div>
           <div className="space-y-2">
             <Label>Interests</Label>
             <div className="flex gap-2">

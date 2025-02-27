@@ -1,3 +1,4 @@
+
 import { Button } from "@/components/ui/button";
 import { ChatControls } from "@/components/chat-controls";
 import { ChatInput } from "@/components/chat-input";
@@ -13,6 +14,7 @@ import { ConnectingState } from "@/components/ConnectingState";
 import { firebaseService } from "@/services/firebaseService";
 import { useToast } from "@/components/ui/use-toast";
 import { OnlineUsers } from "@/components/online-users";
+import { CallButton3D } from "@/components/CallButton3D";
 
 interface Message {
   id: string;
@@ -178,41 +180,36 @@ const Index = () => {
         ) : (
           <div className="w-full max-w-2xl space-y-4 animate-fadeIn">
             <div className="glass rounded-lg p-8 min-h-[400px] overflow-y-auto flex flex-col space-y-4">
-              {messages.map((message) => (
-                <div
-                  key={message.id}
-                  className={`flex ${
-                    message.senderId === firebaseService.getCurrentUserId()
-                      ? "justify-end"
-                      : "justify-start"
-                  }`}
-                >
+              {communicationType === "chat" ? (
+                messages.map((message) => (
                   <div
-                    className={`max-w-[70%] p-3 rounded-lg ${
+                    key={message.id}
+                    className={`flex ${
                       message.senderId === firebaseService.getCurrentUserId()
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted"
+                        ? "justify-end"
+                        : "justify-start"
                     }`}
                   >
-                    {message.text}
+                    <div
+                      className={`max-w-[70%] p-3 rounded-lg ${
+                        message.senderId === firebaseService.getCurrentUserId()
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted"
+                      }`}
+                    >
+                      {message.text}
+                    </div>
                   </div>
+                ))
+              ) : (
+                <div className="flex-1 flex items-center justify-center">
+                  <CallButton3D onEndCall={handleDisconnect} />
                 </div>
-              ))}
+              )}
             </div>
             {communicationType === "chat" ? (
               <ChatInput />
-            ) : (
-              <div className="flex justify-center">
-                <Button
-                  variant="destructive"
-                  size="lg"
-                  onClick={handleDisconnect}
-                  className="px-8 py-6"
-                >
-                  End Call
-                </Button>
-              </div>
-            )}
+            ) : null}
             <div className="flex justify-center">
               <ChatControls onDisconnect={handleDisconnect} />
             </div>
