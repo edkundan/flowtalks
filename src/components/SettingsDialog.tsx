@@ -13,6 +13,7 @@ import { Badge } from "./ui/badge";
 import { X } from "lucide-react";
 import { Button } from "./ui/button";
 import { useState, useEffect } from "react";
+import { toast } from "./ui/use-toast";
 
 export const SettingsDialog = ({
   open,
