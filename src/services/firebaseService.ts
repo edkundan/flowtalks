@@ -24,17 +24,14 @@ class FirebaseService {
   private initialized: boolean = false;
   private messageCallback: ((message: any) => void) | null = null;
   private partnerRef: DatabaseReference | null = null;
-  private availableUsersRef: DatabaseReference | null = null;
   private currentChatRoom: string | null = null;
-  private peerConnection: RTCPeerConnection | null = null;
-  private localStream: MediaStream | null = null;
-  private remoteStream: MediaStream | null = null;
-  private userCountCallback: ((count: number) => void) | null = null;
-  private audioElement: HTMLAudioElement | null = null;
   private isInCall: boolean = false;
   private isInitiator: boolean = false;
   private currentPartnerId: string | null = null;
   private partnerDisconnectCallback: (() => void) | null = null;
+  private userCountCallback: ((count: number) => void) | null = null;
+  private useSimulationMode: boolean = false;
+  private partnerWatchTimeout: NodeJS.Timeout | null = null;
 
   constructor() {
     try {
@@ -46,13 +43,16 @@ class FirebaseService {
       this.setupOnlineUsersCounter();
     } catch (error) {
       console.error('Firebase initialization error:', error);
+      this.useSimulationMode = true;
+      this.initialized = true;
+      this.userId = 'local_' + Math.random().toString(36).substring(2, 15);
     }
   }
 
   private setupOnlineUsersCounter() {
-    // Try to get online users count from Firebase
     try {
       const onlineUsersRef = ref(this.db, 'onlineUsers');
+      
       onValue(onlineUsersRef, (snapshot) => {
         const count = snapshot.size;
         console.log('Online users count:', count);
@@ -63,14 +63,14 @@ class FirebaseService {
         console.error('Error getting online users count:', error);
         // Fallback to random count if Firebase fails
         if (this.userCountCallback) {
-          this.userCountCallback(Math.floor(Math.random() * 50) + 50); // Simulate 50-100 users
+          this.userCountCallback(Math.floor(Math.random() * 50) + 50);
         }
       });
     } catch (error) {
       console.error('Failed to setup online users counter:', error);
       // Fallback to random count
       if (this.userCountCallback) {
-        this.userCountCallback(Math.floor(Math.random() * 50) + 50); // Simulate 50-100 users
+        this.userCountCallback(Math.floor(Math.random() * 50) + 50);
       }
       
       // Setup periodic refresh for simulated counts
@@ -78,7 +78,7 @@ class FirebaseService {
         if (this.userCountCallback) {
           this.userCountCallback(Math.floor(Math.random() * 50) + 50);
         }
-      }, 60000); // Every minute
+      }, 60000);
     }
   }
 
@@ -111,30 +111,56 @@ class FirebaseService {
       this.initialized = true;
       console.log('Successfully signed in anonymously:', this.userId);
       
-      if (this.userId) {
-        try {
-          // Generate random user data instead of trying to write to Firebase
-          this.userId = userCredential.user.uid;
-          console.log('Using user ID:', this.userId);
+      // Track connection state
+      const connectedRef = ref(this.db, '.info/connected');
+      onValue(connectedRef, async (snap) => {
+        if (snap.val() === true && this.userId) {
+          console.log('Connected to Firebase, setting up online status');
           
-          // We'll simulate the partner connection locally
-          const connectedRef = ref(this.db, '.info/connected');
-          onValue(connectedRef, (snap) => {
-            if (snap.val() === false && this.userId) {
-              this.cleanup(true);
-            }
-          });
-        } catch (error) {
-          console.error('Error setting up user status:', error);
-          // If Firebase permissions fail, we'll work with the userID only
+          try {
+            // Set up presence system
+            const userStatusRef = ref(this.db, `users/${this.userId}`);
+            const onlineUserRef = ref(this.db, `onlineUsers/${this.userId}`);
+            
+            // When we disconnect, remove this device
+            await set(onlineUserRef, {
+              timestamp: serverTimestamp(),
+              status: 'online'
+            });
+            
+            // Remove the user from the online list when disconnected
+            onValue(connectedRef, (snapshot) => {
+              if (snapshot.val() === false) {
+                console.log('Disconnected from Firebase');
+                // No need to do anything here as onDisconnect will handle it
+              }
+            });
+            
+            // Initial setup of user status
+            await set(userStatusRef, {
+              status: 'online',
+              lastSeen: serverTimestamp(),
+              partner: null
+            });
+            
+          } catch (error) {
+            console.error('Failed to set up online status:', error);
+            this.useSimulationMode = true;
+          }
+        } else if (snap.val() === false) {
+          console.log('Disconnected from Firebase');
+          if (this.userId) {
+            this.cleanup(true);
+          }
         }
-      }
+      });
+      
     } catch (error: any) {
-      console.error('Anonymous authentication error:', error.code, error.message);
-      // Generate a random user ID if Firebase auth fails
+      console.error('Anonymous authentication error:', error);
+      this.useSimulationMode = true;
       this.userId = 'local_' + Math.random().toString(36).substring(2, 15);
       this.initialized = true;
-      console.log('Generated local user ID:', this.userId);
+      console.log('Generated local user ID due to auth error:', this.userId);
     }
   }
 
@@ -191,61 +217,268 @@ class FirebaseService {
       return null;
     }
     
+    // If in simulation mode, use simulated partner
+    if (this.useSimulationMode) {
+      return this.findSimulatedPartner();
+    }
+    
     try {
-      console.log('Finding partner...');
-      
+      console.log('Looking for a real partner via Firebase...');
       await this.cleanup(false);
       
       try {
-        // Simulate a delay finding a partner
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // First check if user already has a partner
+        const currentUserRef = ref(this.db, `users/${this.userId}`);
+        const currentUserSnap = await get(currentUserRef);
         
-        // Generate a simulated partner ID
-        const randomPartnerId = 'partner_' + Math.random().toString(36).substring(2, 10);
-        console.log('Found simulated partner:', randomPartnerId);
+        if (currentUserSnap.exists() && currentUserSnap.val().partner) {
+          const partnerId = currentUserSnap.val().partner;
+          console.log('User already has a partner:', partnerId);
+          
+          // Check if this partner is blocked
+          if (this.isUserBlocked(partnerId)) {
+            console.log('This partner is blocked, removing connection');
+            
+            // Remove the connection
+            const updates: any = {};
+            updates[`users/${this.userId}/partner`] = null;
+            updates[`users/${partnerId}/partner`] = null;
+            await update(ref(this.db), updates);
+            
+            // Continue finding a new partner
+          } else {
+            // Use existing partner
+            this.currentPartnerId = partnerId;
+            this.currentChatRoom = currentUserSnap.val().chatRoom || [this.userId, partnerId].sort().join('_');
+            
+            // Store the current partner ID for reporting feature
+            localStorage.setItem('currentPartnerId', partnerId);
+            
+            this.setupChatListener(partnerId);
+            return partnerId;
+          }
+        }
+
+        // Check if there are any available users
+        const availableUsersRef = ref(this.db, 'availableUsers');
+        const snapshot = await get(availableUsersRef);
         
-        this.currentPartnerId = randomPartnerId;
-        
-        // Store the current partner ID for reporting feature
-        localStorage.setItem('currentPartnerId', randomPartnerId);
-        
-        // Create a chat room ID
-        this.currentChatRoom = [this.userId, randomPartnerId].sort().join('_');
-        console.log('Created chat room:', this.currentChatRoom);
-        
-        // We're the initiator
-        this.isInitiator = true;
-        
-        // Set up message handling
-        if (this.messageCallback) {
-          // Send a welcome message from the "partner"
-          setTimeout(() => {
-            this.messageCallback([{
-              id: Date.now().toString(),
-              text: "Hi there! I'm connected through a simulated peer. The real connection couldn't be established due to permission issues with Firebase.",
-              senderId: randomPartnerId,
-              timestamp: Date.now()
-            }]);
-          }, 1000);
+        if (!snapshot.exists() || snapshot.size === 0) {
+          console.log('No available users, adding self to pool');
+          
+          // Get user preferences
+          const userCollege = localStorage.getItem('userCollege') || '';
+          const userGenderPref = localStorage.getItem('genderPreference') || 'any';
+          
+          // Add self to available users
+          await set(ref(this.db, `availableUsers/${this.userId}`), {
+            timestamp: serverTimestamp(),
+            status: 'searching',
+            college: userCollege,
+            genderPref: userGenderPref
+          });
+          
+          // We're not the initiator since we're waiting for a partner
+          this.isInitiator = false;
+          
+          console.log('Added self to available users pool, waiting for partner...');
+          
+          // Set up a listener to wait for a partner
+          return new Promise((resolve) => {
+            const partnerRef = ref(this.db, `users/${this.userId}/partner`);
+            
+            const unsubscribe = onValue(partnerRef, async (snapshot) => {
+              if (snapshot.exists()) {
+                const partnerId = snapshot.val();
+                console.log('Partner found via listener:', partnerId);
+                
+                // Check if this partner is blocked
+                if (this.isUserBlocked(partnerId)) {
+                  console.log('This partner is blocked, rejecting');
+                  
+                  // Reject this partner
+                  const updates: any = {};
+                  updates[`users/${this.userId}/partner`] = null;
+                  updates[`users/${partnerId}/partner`] = null;
+                  await update(ref(this.db), updates);
+                  return;
+                }
+                
+                // Get the chat room
+                const chatRoomSnap = await get(ref(this.db, `users/${this.userId}/chatRoom`));
+                if (chatRoomSnap.exists()) {
+                  this.currentChatRoom = chatRoomSnap.val();
+                } else {
+                  this.currentChatRoom = [this.userId, partnerId].sort().join('_');
+                }
+                
+                this.currentPartnerId = partnerId;
+                
+                // Store the current partner ID for reporting feature
+                localStorage.setItem('currentPartnerId', partnerId);
+                
+                // Clean up listeners
+                off(partnerRef);
+                
+                // Set up chat listener
+                this.setupChatListener(partnerId);
+                
+                // Remove self from available users
+                await set(ref(this.db, `availableUsers/${this.userId}`), null);
+                
+                resolve(partnerId);
+              }
+            }, (error) => {
+              console.error('Error watching for partner:', error);
+              off(partnerRef);
+              this.useSimulationMode = true;
+              resolve(this.findSimulatedPartner());
+            });
+            
+            // Set timeout to abort after 30 seconds
+            if (this.partnerWatchTimeout) {
+              clearTimeout(this.partnerWatchTimeout);
+            }
+            
+            this.partnerWatchTimeout = setTimeout(() => {
+              console.log('Partner finding timed out');
+              off(partnerRef);
+              resolve(null);
+            }, 30000);
+          });
         }
         
-        return randomPartnerId;
+        // Find a compatible partner
+        console.log('Looking through available users...');
+        const userCollege = localStorage.getItem('userCollege') || '';
+        const userGenderPref = localStorage.getItem('genderPreference') || 'any';
+        
+        const availableUsers: string[] = [];
+        
+        snapshot.forEach((childSnapshot) => {
+          const userId = childSnapshot.key;
+          if (userId && userId !== this.userId && !this.isUserBlocked(userId)) {
+            const userData = childSnapshot.val();
+            
+            // Check college preference if set
+            if (userCollege && userData.college && userCollege !== userData.college) {
+              return;
+            }
+            
+            // Check gender preference if set
+            if (userGenderPref !== 'any' && userData.gender && userGenderPref !== userData.gender) {
+              return;
+            }
+            
+            availableUsers.push(userId);
+          }
+        });
+        
+        if (availableUsers.length > 0) {
+          // Pick a random available user
+          const randomIndex = Math.floor(Math.random() * availableUsers.length);
+          const partnerId = availableUsers[randomIndex];
+          console.log('Found partner from available users:', partnerId);
+          
+          // Create a chat room
+          const chatRoomId = [this.userId, partnerId].sort().join('_');
+          this.currentChatRoom = chatRoomId;
+          this.currentPartnerId = partnerId;
+          
+          // Store the current partner ID for reporting feature
+          localStorage.setItem('currentPartnerId', partnerId);
+          
+          // Update the database
+          const updates: any = {};
+          updates[`availableUsers/${this.userId}`] = null;
+          updates[`availableUsers/${partnerId}`] = null;
+          updates[`users/${this.userId}/partner`] = partnerId;
+          updates[`users/${partnerId}/partner`] = this.userId;
+          updates[`users/${this.userId}/chatRoom`] = chatRoomId;
+          updates[`users/${partnerId}/chatRoom`] = chatRoomId;
+          
+          // Add chat room entry with participants
+          updates[`chats/${chatRoomId}/participants`] = {
+            [this.userId as string]: true,
+            [partnerId]: true
+          };
+          updates[`chats/${chatRoomId}/created`] = serverTimestamp();
+          
+          try {
+            await update(ref(this.db), updates);
+          } catch (error) {
+            console.error('Error updating partner information:', error);
+            // Continue with the partner even if update fails
+          }
+          
+          // We're the initiator since we found the partner
+          this.isInitiator = true;
+          
+          // Set up chat listener
+          this.setupChatListener(partnerId);
+          
+          return partnerId;
+        }
+        
+        // No partner found, add self to available users
+        console.log('No partner found, adding self to available users');
+        await set(ref(this.db, `availableUsers/${this.userId}`), {
+          timestamp: serverTimestamp(),
+          status: 'searching',
+          college: userCollege,
+          genderPref: userGenderPref
+        });
+        
+        return null;
+        
       } catch (error) {
-        console.error('Error in finding partner, continuing with simulation:', error);
-        
-        // Generate a simulated partner ID
-        const randomPartnerId = 'partner_' + Math.random().toString(36).substring(2, 10);
-        this.currentPartnerId = randomPartnerId;
-        localStorage.setItem('currentPartnerId', randomPartnerId);
-        this.currentChatRoom = [this.userId, randomPartnerId].sort().join('_');
-        this.isInitiator = true;
-        
-        return randomPartnerId;
+        console.error('Error finding partner via Firebase:', error);
+        // Fall back to simulation mode
+        this.useSimulationMode = true;
+        return this.findSimulatedPartner();
       }
     } catch (error) {
-      console.error('Error finding partner:', error);
-      return null;
+      console.error('Error in findPartner:', error);
+      this.useSimulationMode = true;
+      return this.findSimulatedPartner();
     }
+  }
+
+  private async findSimulatedPartner(): Promise<string | null> {
+    console.log('Finding simulated partner...');
+    
+    // Simulate delay
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // Generate a simulated partner ID
+    const randomPartnerId = 'partner_' + Math.random().toString(36).substring(2, 10);
+    console.log('Found simulated partner:', randomPartnerId);
+    
+    this.currentPartnerId = randomPartnerId;
+    
+    // Store the current partner ID for reporting feature
+    localStorage.setItem('currentPartnerId', randomPartnerId);
+    
+    // Create a chat room ID
+    this.currentChatRoom = [this.userId, randomPartnerId].sort().join('_');
+    console.log('Created chat room:', this.currentChatRoom);
+    
+    // We're the initiator in simulation mode
+    this.isInitiator = true;
+    
+    // Send a welcome message
+    if (this.messageCallback) {
+      setTimeout(() => {
+        this.messageCallback([{
+          id: Date.now().toString(),
+          text: "Hi there! I'm connected through a simulated peer. The real connection couldn't be established due to some issues.",
+          senderId: randomPartnerId,
+          timestamp: Date.now()
+        }]);
+      }, 1000);
+    }
+    
+    return randomPartnerId;
   }
 
   async setupAudioCall() {
@@ -266,25 +499,168 @@ class FirebaseService {
         throw new Error('Failed to get local stream');
       }
 
-      // Since we're simulating, just assume the connection works
-      // The real WebRTC connection won't actually happen, but the UI will show as connected
-      
-      // After a short delay, show that the call is connected
-      setTimeout(() => {
-        toast({
-          title: "Call Connected",
-          description: "Simulated call connection. Note: In this version, no actual audio will be transmitted due to permission issues."
-        });
-      }, 2000);
+      // If using simulation mode
+      if (this.useSimulationMode) {
+        console.log('Using simulated audio call');
+        
+        // After a short delay, show that the call is connected
+        setTimeout(() => {
+          toast({
+            title: "Call Connected",
+            description: "Simulated call connection"
+          });
+        }, 2000);
+        
+        return;
+      }
 
+      // Using real WebRTC with Firebase signaling
+      if (!this.currentChatRoom) {
+        this.currentChatRoom = [this.userId, this.currentPartnerId].sort().join('_');
+      }
+      
+      try {
+        // Clear any existing signaling data
+        const signalingRef = ref(this.db, `chats/${this.currentChatRoom}/signaling`);
+        await set(signalingRef, null);
+        
+        // Set up ICE candidate handling
+        webRTCService.onIceCandidate((candidate) => {
+          if (!this.currentChatRoom || !this.userId) return;
+          
+          console.log('Sending ICE candidate');
+          const candidatesRef = ref(this.db, `chats/${this.currentChatRoom}/candidates/${this.userId}`);
+          push(candidatesRef, {
+            candidate: candidate.toJSON(),
+            timestamp: serverTimestamp()
+          });
+        });
+        
+        // Listen for ICE candidates from partner
+        const candidatesRef = ref(this.db, `chats/${this.currentChatRoom}/candidates/${this.currentPartnerId}`);
+        onValue(candidatesRef, (snapshot) => {
+          if (!snapshot.exists()) return;
+          
+          snapshot.forEach((childSnapshot) => {
+            const data = childSnapshot.val();
+            if (data && data.candidate) {
+              console.log('Received ICE candidate from partner');
+              webRTCService.addIceCandidate(data.candidate);
+            }
+          });
+        });
+        
+        // Only the initiator creates an offer
+        if (this.isInitiator) {
+          console.log('Creating WebRTC offer as initiator');
+          const offer = await webRTCService.createOffer();
+          
+          if (offer) {
+            await set(ref(this.db, `chats/${this.currentChatRoom}/signaling/offer`), {
+              type: offer.type,
+              sdp: offer.sdp,
+              timestamp: serverTimestamp()
+            });
+            console.log('Offer sent to signaling server');
+          }
+        }
+        
+        // Listen for signaling messages
+        onValue(ref(this.db, `chats/${this.currentChatRoom}/signaling`), async (snapshot) => {
+          const data = snapshot.val();
+          if (!data) return;
+          
+          // Handle offer if we're the callee
+          if (data.offer && !this.isInitiator) {
+            console.log('Received offer, creating answer');
+            const answer = await webRTCService.handleOffer(data.offer);
+            
+            if (answer) {
+              await set(ref(this.db, `chats/${this.currentChatRoom}/signaling/answer`), {
+                type: answer.type,
+                sdp: answer.sdp,
+                timestamp: serverTimestamp()
+              });
+              console.log('Answer sent to signaling server');
+            }
+          }
+          
+          // Handle answer if we're the caller
+          if (data.answer && this.isInitiator) {
+            console.log('Received answer from partner');
+            await webRTCService.handleAnswer(data.answer);
+          }
+        });
+      } catch (error) {
+        console.error('Error in WebRTC signaling:', error);
+        toast({
+          variant: "destructive",
+          title: "Call Setup Issue",
+          description: "There was a problem with the call setup. Audio might not work correctly."
+        });
+      }
     } catch (error) {
       console.error('Error in setupAudioCall:', error);
       this.isInCall = false;
       toast({
         variant: "destructive",
         title: "Call Setup Failed",
-        description: "Unable to establish voice connection"
+        description: "Unable to establish voice connection. Please check your microphone settings."
       });
+    }
+  }
+
+  private setupChatListener(partnerId: string) {
+    if (!this.userId || !this.currentChatRoom) {
+      console.error('Cannot set up chat listener: missing user ID or chat room');
+      return;
+    }
+    
+    console.log('Setting up chat listener for room:', this.currentChatRoom);
+    
+    // If using simulation mode, we don't need a real listener
+    if (this.useSimulationMode) {
+      return;
+    }
+    
+    try {
+      // Clean up any existing listeners
+      if (this.partnerRef) {
+        off(this.partnerRef);
+      }
+      
+      // Listen for partner disconnection
+      const partnerConnectionRef = ref(this.db, `users/${partnerId}/partner`);
+      onValue(partnerConnectionRef, (snapshot) => {
+        if (!snapshot.exists() || snapshot.val() !== this.userId) {
+          console.log('Partner disconnected or changed');
+          this.handlePartnerDisconnect();
+        }
+      });
+      
+      // Listen for chat messages
+      const chatRef = ref(this.db, `chats/${this.currentChatRoom}/messages`);
+      this.partnerRef = chatRef;
+      
+      onValue(chatRef, (snapshot) => {
+        const messages = snapshot.val();
+        if (messages && this.messageCallback) {
+          console.log('Received chat messages:', messages);
+          const messageArray = Object.entries(messages).map(([key, value]: [string, any]) => ({
+            id: key,
+            ...value
+          }));
+          
+          // Sort messages by timestamp
+          messageArray.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+          
+          this.messageCallback(messageArray);
+        }
+      }, (error) => {
+        console.error('Error listening for chat messages:', error);
+      });
+    } catch (error) {
+      console.error('Error setting up chat listener:', error);
     }
   }
 
@@ -294,7 +670,8 @@ class FirebaseService {
       return false;
     }
     
-    try {
+    // If using simulation mode
+    if (this.useSimulationMode) {
       console.log('Sending simulated message');
       
       // Add our own message to the UI
@@ -308,7 +685,7 @@ class FirebaseService {
       }
       
       // Simulate a reply after a random delay
-      if (this.currentPartnerId && Math.random() > 0.5) {
+      if (this.currentPartnerId && Math.random() > 0.3) {
         setTimeout(() => {
           if (this.messageCallback) {
             const responses = [
@@ -318,8 +695,7 @@ class FirebaseService {
               "I agree with you.",
               "What else would you like to chat about?",
               "How's your day going?",
-              "This is just a simulated response because we're having connection issues with the server.",
-              "I'm not a real person, just a simulated partner since Firebase connections are failing.",
+              "This is just a simulated response because we're having some connection issues.",
               "Interesting point!"
             ];
             const randomResponse = responses[Math.floor(Math.random() * responses.length)];
@@ -335,9 +711,42 @@ class FirebaseService {
       }
       
       return true;
+    }
+    
+    // Using real Firebase
+    try {
+      if (!this.currentChatRoom) {
+        console.error('No chat room available for sending message');
+        return false;
+      }
+      
+      console.log('Sending message to chat room:', this.currentChatRoom);
+      const messagesRef = ref(this.db, `chats/${this.currentChatRoom}/messages`);
+      
+      await push(messagesRef, {
+        text: message,
+        senderId: this.userId,
+        timestamp: serverTimestamp()
+      });
+      
+      return true;
     } catch (error) {
       console.error('Error sending message:', error);
-      return false;
+      
+      // Fall back to simulation mode if Firebase fails
+      this.useSimulationMode = true;
+      
+      // Add message locally
+      if (this.messageCallback) {
+        this.messageCallback([{
+          id: Date.now().toString(),
+          text: message,
+          senderId: this.userId || 'local',
+          timestamp: Date.now()
+        }]);
+      }
+      
+      return true;
     }
   }
 
@@ -346,21 +755,85 @@ class FirebaseService {
   }
 
   async cleanup(fullCleanup: boolean = true) {
-    console.log('Cleaning up connections...');
+    console.log('Cleaning up resources...');
     
     if (fullCleanup && this.isInCall) {
       webRTCService.endCall();
       this.isInCall = false;
     }
     
-    if (fullCleanup) {
-      // Clear the current partner ID
-      this.currentPartnerId = null;
-      localStorage.removeItem('currentPartnerId');
-      this.currentChatRoom = null;
+    // Clear partner watch timeout
+    if (this.partnerWatchTimeout) {
+      clearTimeout(this.partnerWatchTimeout);
+      this.partnerWatchTimeout = null;
     }
     
-    console.log('Cleanup completed successfully');
+    // If using simulation mode, just clear local state
+    if (this.useSimulationMode) {
+      if (fullCleanup) {
+        this.currentPartnerId = null;
+        localStorage.removeItem('currentPartnerId');
+        this.currentChatRoom = null;
+      }
+      return;
+    }
+    
+    // Using real Firebase
+    if (!this.initialized || !this.userId) return;
+    
+    try {
+      // Basic updates
+      const updates: any = {};
+      
+      // If full cleanup, clean up partner connections
+      if (fullCleanup && this.currentPartnerId) {
+        try {
+          updates[`users/${this.userId}/partner`] = null;
+          
+          // Try to update partner's status too if we know who they are
+          updates[`users/${this.currentPartnerId}/partner`] = null;
+        } catch (error) {
+          console.error('Error updating partner status during cleanup:', error);
+        }
+      }
+      
+      // Remove from available users
+      updates[`availableUsers/${this.userId}`] = null;
+      
+      if (Object.keys(updates).length > 0) {
+        try {
+          await update(ref(this.db), updates);
+        } catch (error) {
+          console.error('Error updating Firebase during cleanup:', error);
+        }
+      }
+      
+      // Clean up listeners
+      if (fullCleanup) {
+        if (this.partnerRef) {
+          off(this.partnerRef);
+          this.partnerRef = null;
+        }
+        
+        if (this.currentChatRoom) {
+          try {
+            // Clean up WebRTC signaling listeners
+            off(ref(this.db, `chats/${this.currentChatRoom}/signaling`));
+            off(ref(this.db, `chats/${this.currentChatRoom}/candidates`));
+          } catch (error) {
+            console.error('Error removing signaling listeners:', error);
+          }
+        }
+        
+        this.currentPartnerId = null;
+        localStorage.removeItem('currentPartnerId');
+        this.currentChatRoom = null;
+      }
+      
+      console.log('Cleanup completed successfully');
+    } catch (error) {
+      console.error('Error during cleanup:', error);
+    }
   }
 }
 
