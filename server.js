@@ -17,6 +17,7 @@ const io = new Server(server, {
 
 // Track connected users
 let connectedUsers = new Set();
+let userPartners = new Map(); // Track user partnerships
 
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
@@ -25,13 +26,39 @@ io.on('connection', (socket) => {
 
   // Find chat partner
   socket.on('findPartner', () => {
-    const availableUsers = Array.from(connectedUsers).filter(id => id !== socket.id);
+    // First, clean up any existing partnerships for this user
+    if (userPartners.has(socket.id)) {
+      const oldPartner = userPartners.get(socket.id);
+      const partnerSocket = io.sockets.sockets.get(oldPartner);
+      
+      if (partnerSocket) {
+        partnerSocket.partner = null;
+        userPartners.delete(oldPartner);
+        partnerSocket.emit('partnerDisconnected');
+      }
+      
+      userPartners.delete(socket.id);
+      socket.partner = null;
+    }
+    
+    const availableUsers = Array.from(connectedUsers).filter(id => 
+      id !== socket.id && 
+      !userPartners.has(id) // Only users not already partnered
+    );
+    
     if (availableUsers.length > 0) {
       const randomPartner = availableUsers[Math.floor(Math.random() * availableUsers.length)];
       socket.partner = randomPartner;
+      
       const partnerSocket = io.sockets.sockets.get(randomPartner);
       if (partnerSocket) {
         partnerSocket.partner = socket.id;
+        
+        // Record the partnership
+        userPartners.set(socket.id, randomPartner);
+        userPartners.set(randomPartner, socket.id);
+        
+        // Notify both users
         socket.emit('partnerFound', randomPartner);
         partnerSocket.emit('partnerFound', socket.id);
       }
@@ -67,16 +94,36 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle disconnection
-  socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
+  // Handle explicit disconnect request
+  socket.on('endConnection', () => {
     if (socket.partner) {
       const partnerSocket = io.sockets.sockets.get(socket.partner);
       if (partnerSocket) {
         partnerSocket.partner = null;
+        userPartners.delete(partnerSocket.id);
         partnerSocket.emit('partnerDisconnected');
       }
+      
+      userPartners.delete(socket.id);
+      socket.partner = null;
     }
+  });
+
+  // Handle disconnection
+  socket.on('disconnect', () => {
+    console.log('User disconnected:', socket.id);
+    
+    if (socket.partner) {
+      const partnerSocket = io.sockets.sockets.get(socket.partner);
+      if (partnerSocket) {
+        partnerSocket.partner = null;
+        userPartners.delete(partnerSocket.id);
+        partnerSocket.emit('partnerDisconnected');
+      }
+      
+      userPartners.delete(socket.id);
+    }
+    
     connectedUsers.delete(socket.id);
     io.emit('userCount', connectedUsers.size);
   });

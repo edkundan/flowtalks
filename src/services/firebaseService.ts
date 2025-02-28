@@ -32,6 +32,7 @@ class FirebaseService {
   private userCountCallback: ((count: number) => void) | null = null;
   private useSimulationMode: boolean = false;
   private partnerWatchTimeout: NodeJS.Timeout | null = null;
+  private chatListeners: Array<() => void> = [];
 
   constructor() {
     try {
@@ -136,11 +137,12 @@ class FirebaseService {
               }
             });
             
-            // Initial setup of user status
+            // Initial setup of user status - IMPORTANT: Reset partner to null
             await set(userStatusRef, {
               status: 'online',
               lastSeen: serverTimestamp(),
-              partner: null
+              partner: null,
+              chatRoom: null
             });
             
           } catch (error) {
@@ -224,41 +226,20 @@ class FirebaseService {
     
     try {
       console.log('Looking for a real partner via Firebase...');
-      await this.cleanup(false);
+      
+      // CRITICAL: Clean up properly to avoid connecting to previous chats
+      await this.cleanup(true);
       
       try {
-        // First check if user already has a partner
-        const currentUserRef = ref(this.db, `users/${this.userId}`);
-        const currentUserSnap = await get(currentUserRef);
+        // First make sure our user data is clean
+        const userRef = ref(this.db, `users/${this.userId}`);
+        await set(userRef, {
+          status: 'online',
+          lastSeen: serverTimestamp(),
+          partner: null,
+          chatRoom: null
+        });
         
-        if (currentUserSnap.exists() && currentUserSnap.val().partner) {
-          const partnerId = currentUserSnap.val().partner;
-          console.log('User already has a partner:', partnerId);
-          
-          // Check if this partner is blocked
-          if (this.isUserBlocked(partnerId)) {
-            console.log('This partner is blocked, removing connection');
-            
-            // Remove the connection
-            const updates: any = {};
-            updates[`users/${this.userId}/partner`] = null;
-            updates[`users/${partnerId}/partner`] = null;
-            await update(ref(this.db), updates);
-            
-            // Continue finding a new partner
-          } else {
-            // Use existing partner
-            this.currentPartnerId = partnerId;
-            this.currentChatRoom = currentUserSnap.val().chatRoom || [this.userId, partnerId].sort().join('_');
-            
-            // Store the current partner ID for reporting feature
-            localStorage.setItem('currentPartnerId', partnerId);
-            
-            this.setupChatListener(partnerId);
-            return partnerId;
-          }
-        }
-
         // Check if there are any available users
         const availableUsersRef = ref(this.db, 'availableUsers');
         const snapshot = await get(availableUsersRef);
@@ -335,6 +316,9 @@ class FirebaseService {
               resolve(this.findSimulatedPartner());
             });
             
+            // Store this listener in our cleanup array
+            this.chatListeners.push(() => off(partnerRef));
+            
             // Set timeout to abort after 30 seconds
             if (this.partnerWatchTimeout) {
               clearTimeout(this.partnerWatchTimeout);
@@ -380,15 +364,15 @@ class FirebaseService {
           const partnerId = availableUsers[randomIndex];
           console.log('Found partner from available users:', partnerId);
           
-          // Create a chat room
-          const chatRoomId = [this.userId, partnerId].sort().join('_');
+          // Create a clean new chat room
+          const chatRoomId = [this.userId, partnerId].sort().join('_') + '_' + Date.now();
           this.currentChatRoom = chatRoomId;
           this.currentPartnerId = partnerId;
           
           // Store the current partner ID for reporting feature
           localStorage.setItem('currentPartnerId', partnerId);
           
-          // Update the database
+          // Update the database - IMPORTANT: Clear existing chat data
           const updates: any = {};
           updates[`availableUsers/${this.userId}`] = null;
           updates[`availableUsers/${partnerId}`] = null;
@@ -397,12 +381,13 @@ class FirebaseService {
           updates[`users/${this.userId}/chatRoom`] = chatRoomId;
           updates[`users/${partnerId}/chatRoom`] = chatRoomId;
           
-          // Add chat room entry with participants
+          // Add chat room entry with participants and timestamp to make it unique
           updates[`chats/${chatRoomId}/participants`] = {
             [this.userId as string]: true,
             [partnerId]: true
           };
           updates[`chats/${chatRoomId}/created`] = serverTimestamp();
+          updates[`chats/${chatRoomId}/messages`] = null; // Start with empty messages
           
           try {
             await update(ref(this.db), updates);
@@ -538,7 +523,7 @@ class FirebaseService {
         
         // Listen for ICE candidates from partner
         const candidatesRef = ref(this.db, `chats/${this.currentChatRoom}/candidates/${this.currentPartnerId}`);
-        onValue(candidatesRef, (snapshot) => {
+        const candidateListener = onValue(candidatesRef, (snapshot) => {
           if (!snapshot.exists()) return;
           
           snapshot.forEach((childSnapshot) => {
@@ -549,6 +534,9 @@ class FirebaseService {
             }
           });
         });
+        
+        // Add to cleanup array
+        this.chatListeners.push(() => off(candidatesRef));
         
         // Only the initiator creates an offer
         if (this.isInitiator) {
@@ -566,7 +554,7 @@ class FirebaseService {
         }
         
         // Listen for signaling messages
-        onValue(ref(this.db, `chats/${this.currentChatRoom}/signaling`), async (snapshot) => {
+        const signalingListener = onValue(signalingRef, async (snapshot) => {
           const data = snapshot.val();
           if (!data) return;
           
@@ -591,6 +579,9 @@ class FirebaseService {
             await webRTCService.handleAnswer(data.answer);
           }
         });
+        
+        // Add to cleanup array
+        this.chatListeners.push(() => off(signalingRef));
       } catch (error) {
         console.error('Error in WebRTC signaling:', error);
         toast({
@@ -627,22 +618,26 @@ class FirebaseService {
       // Clean up any existing listeners
       if (this.partnerRef) {
         off(this.partnerRef);
+        this.partnerRef = null;
       }
       
       // Listen for partner disconnection
       const partnerConnectionRef = ref(this.db, `users/${partnerId}/partner`);
-      onValue(partnerConnectionRef, (snapshot) => {
+      const partnerListener = onValue(partnerConnectionRef, (snapshot) => {
         if (!snapshot.exists() || snapshot.val() !== this.userId) {
           console.log('Partner disconnected or changed');
           this.handlePartnerDisconnect();
         }
       });
       
+      // Add to cleanup array
+      this.chatListeners.push(() => off(partnerConnectionRef));
+      
       // Listen for chat messages
       const chatRef = ref(this.db, `chats/${this.currentChatRoom}/messages`);
       this.partnerRef = chatRef;
       
-      onValue(chatRef, (snapshot) => {
+      const messageListener = onValue(chatRef, (snapshot) => {
         const messages = snapshot.val();
         if (messages && this.messageCallback) {
           console.log('Received chat messages:', messages);
@@ -659,6 +654,9 @@ class FirebaseService {
       }, (error) => {
         console.error('Error listening for chat messages:', error);
       });
+      
+      // Add to cleanup array
+      this.chatListeners.push(() => off(chatRef));
     } catch (error) {
       console.error('Error setting up chat listener:', error);
     }
@@ -768,6 +766,10 @@ class FirebaseService {
       this.partnerWatchTimeout = null;
     }
     
+    // Clean up all listeners
+    this.chatListeners.forEach(unsubscribe => unsubscribe());
+    this.chatListeners = [];
+    
     // If using simulation mode, just clear local state
     if (this.useSimulationMode) {
       if (fullCleanup) {
@@ -789,6 +791,7 @@ class FirebaseService {
       if (fullCleanup && this.currentPartnerId) {
         try {
           updates[`users/${this.userId}/partner`] = null;
+          updates[`users/${this.userId}/chatRoom`] = null;
           
           // Try to update partner's status too if we know who they are
           updates[`users/${this.currentPartnerId}/partner`] = null;

@@ -68,33 +68,9 @@ class WebRTCService {
         if (this.remoteAudioElement.srcObject !== remoteStream) {
           this.remoteAudioElement.srcObject = remoteStream;
           console.log('Set remote stream to audio element');
-          
-          // Play audio with user interaction already happened
-          this.remoteAudioElement.play()
-            .then(() => console.log('Remote audio playing successfully'))
-            .catch(err => {
-              console.error('Error playing remote audio:', err);
-              
-              // Try again with user interaction
-              const playButton = document.createElement('button');
-              playButton.textContent = 'Enable Audio';
-              playButton.className = 'fixed top-4 left-1/2 transform -translate-x-1/2 bg-primary text-white px-4 py-2 rounded-md z-50';
-              playButton.onclick = () => {
-                this.remoteAudioElement?.play()
-                  .then(() => {
-                    console.log('Audio started after user interaction');
-                    playButton.remove();
-                  })
-                  .catch(e => console.error('Still failed to play audio:', e));
-              };
-              document.body.appendChild(playButton);
-              
-              toast({
-                variant: "destructive",
-                title: "Audio Error",
-                description: "Click 'Enable Audio' to hear your partner."
-              });
-            });
+
+          // Play audio - critical for auto-play issues
+          this.playAudio();
         }
       };
 
@@ -118,6 +94,9 @@ class WebRTCService {
             title: "Call Connected",
             description: "You can now talk to your partner"
           });
+          
+          // Make one more attempt to play audio when connected
+          this.playAudio();
         } else if (state === 'failed' || state === 'disconnected' || state === 'closed') {
           toast({
             variant: "destructive",
@@ -132,6 +111,8 @@ class WebRTCService {
         console.log('ICE connection state:', this.peerConnection?.iceConnectionState);
         if (this.peerConnection?.iceConnectionState === 'connected') {
           console.log('ICE connected - audio should be flowing now');
+          // One more attempt to play audio
+          this.playAudio();
         }
       };
 
@@ -150,6 +131,57 @@ class WebRTCService {
       });
       return null;
     }
+  }
+
+  // Helper method to play audio with multiple fallbacks
+  private playAudio() {
+    if (!this.remoteAudioElement || !this.remoteAudioElement.srcObject) return;
+    
+    console.log('Attempting to play remote audio...');
+    
+    // Try to play immediately
+    this.remoteAudioElement.play()
+      .then(() => console.log('Remote audio playing successfully'))
+      .catch(err => {
+        console.error('Error playing remote audio:', err);
+        
+        // Show a play button in case of autoplay issues
+        this.createPlayButton();
+        
+        // Also try to play again after a short delay
+        setTimeout(() => {
+          this.remoteAudioElement?.play()
+            .then(() => console.log('Delayed play successful'))
+            .catch(e => console.error('Delayed play also failed:', e));
+        }, 1000);
+      });
+  }
+
+  // Create a user-activatable play button
+  private createPlayButton() {
+    // Remove any existing buttons first
+    const existingButton = document.getElementById('enable-audio-btn');
+    if (existingButton) existingButton.remove();
+    
+    const playButton = document.createElement('button');
+    playButton.id = 'enable-audio-btn';
+    playButton.textContent = 'Enable Audio';
+    playButton.className = 'fixed top-4 left-1/2 transform -translate-x-1/2 bg-primary text-white px-4 py-2 rounded-md z-50';
+    playButton.onclick = () => {
+      this.remoteAudioElement?.play()
+        .then(() => {
+          console.log('Audio started after user interaction');
+          playButton.remove();
+        })
+        .catch(e => console.error('Still failed to play audio:', e));
+    };
+    document.body.appendChild(playButton);
+    
+    toast({
+      variant: "destructive",
+      title: "Audio Error",
+      description: "Click 'Enable Audio' to hear your partner."
+    });
   }
 
   toggleMute() {
@@ -307,6 +339,10 @@ class WebRTCService {
       this.peerConnection = null;
       console.log('Closed peer connection');
     }
+    
+    // Remove any audio enable buttons
+    const audioButton = document.getElementById('enable-audio-btn');
+    if (audioButton) audioButton.remove();
     
     // Reset signaling state
     this.signalingState = "new";
