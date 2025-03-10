@@ -6,14 +6,14 @@ import { webRTCService } from './webRTCService';
 import { toast } from '@/components/ui/use-toast';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyDEo2b9ALsMDOZOAg_1R0VMjdB_QnRh2kk",
-  authDomain: "random-talk-dd79a.firebaseapp.com",
-  databaseURL: "https://random-talk-dd79a-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "random-talk-dd79a",
-  storageBucket: "random-talk-dd79a.firebasestorage.app",
-  messagingSenderId: "870826315489",
-  appId: "1:870826315489:web:8796f08e2495100e1eb1a0",
-  measurementId: "G-5PFT3YWGVF"
+  apiKey: "",
+  authDomain: "",
+  databaseURL: "",
+  projectId: "",
+  storageBucket: "",
+  messagingSenderId: "",
+  appId: "",
+  measurementId: ""
 };
 
 class FirebaseService {
